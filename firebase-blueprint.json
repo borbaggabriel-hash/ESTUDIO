@@ -1,0 +1,150 @@
+{
+  "entities": {
+    "Banner": {
+      "title": "Banner",
+      "description": "Banners para o carrossel da home",
+      "type": "object",
+      "properties": {
+        "title": { "type": "string" },
+        "subtitle": { "type": "string" },
+        "description": { "type": "string" },
+        "imageUrl": { "type": "string" }
+      },
+      "required": ["title", "imageUrl"]
+    },
+    "Module": {
+      "title": "Módulo",
+      "description": "Módulos do curso",
+      "type": "object",
+      "properties": {
+        "num": { "type": "string" },
+        "slug": { "type": "string" },
+        "title": { "type": "string" },
+        "teacher": { "type": "string" },
+        "duration": { "type": "string" },
+        "desc": { "type": "string" },
+        "icon": { "type": "string" },
+        "details": {
+          "type": "object",
+          "properties": {
+            "methodology": { "type": "array", "items": { "type": "string" } },
+            "lessons": { "type": "array", "items": { "type": "string" } }
+          }
+        }
+      },
+      "required": ["num", "slug", "title"]
+    },
+    "Teacher": {
+      "title": "Professor",
+      "description": "Professores da formação",
+      "type": "object",
+      "properties": {
+        "name": { "type": "string" },
+        "role": { "type": "string" },
+        "photo": { "type": "string" },
+        "specialties": { "type": "array", "items": { "type": "string" } },
+        "bio": { "type": "string" }
+      },
+      "required": ["name", "photo"]
+    },
+    "Learning": {
+      "title": "Aprendizado",
+      "description": "O que o aluno vai aprender",
+      "type": "object",
+      "properties": {
+        "title": { "type": "string" },
+        "description": { "type": "string" }
+      },
+      "required": ["title"]
+    },
+    "Testimonial": {
+      "title": "Depoimento",
+      "description": "Depoimentos de alunos",
+      "type": "object",
+      "properties": {
+        "name": { "type": "string" },
+        "role": { "type": "string" },
+        "text": { "type": "string" },
+        "avatar": { "type": "string" }
+      },
+      "required": ["name", "text"]
+    },
+    "FAQ": {
+      "title": "FAQ",
+      "description": "Perguntas frequentes",
+      "type": "object",
+      "properties": {
+        "question": { "type": "string" },
+        "answer": { "type": "string" }
+      },
+      "required": ["question", "answer"]
+    },
+    "Settings": {
+      "title": "Configurações",
+      "description": "Configurações globais do site",
+      "type": "object",
+      "properties": {
+        "site_name": { "type": "string" },
+        "contact_email": { "type": "string" },
+        "whatsapp_number": { "type": "string" },
+        "instagram_url": { "type": "string" },
+        "youtube_url": { "type": "string" },
+        "course_price": { "type": "string" },
+        "course_installments": { "type": "string" }
+      }
+    },
+    "Enrollment": {
+      "title": "Matrícula",
+      "description": "Solicitações de matrícula",
+      "type": "object",
+      "properties": {
+        "name": { "type": "string" },
+        "email": { "type": "string" },
+        "phone": { "type": "string" },
+        "module": { "type": "string" },
+        "status": { "type": "string", "enum": ["pending", "approved", "rejected"] },
+        "created_at": { "type": "string", "format": "date-time" }
+      },
+      "required": ["name", "email", "phone", "module"]
+    },
+    "Profile": {
+      "title": "Perfil",
+      "description": "Perfil do usuário/aluno",
+      "type": "object",
+      "properties": {
+        "full_name": { "type": "string" },
+        "email": { "type": "string" },
+        "role": { "type": "string", "enum": ["student", "owner"] },
+        "plan": { "type": "string" },
+        "status": { "type": "string" },
+        "avatar_url": { "type": "string" },
+        "created_at": { "type": "string", "format": "date-time" }
+      },
+      "required": ["email", "role"]
+    },
+    "Activity": {
+      "title": "Atividade",
+      "description": "Atividades recentes dos alunos",
+      "type": "object",
+      "properties": {
+        "student_id": { "type": "string" },
+        "activity_type": { "type": "string" },
+        "description": { "type": "string" },
+        "created_at": { "type": "string", "format": "date-time" }
+      },
+      "required": ["student_id", "activity_type"]
+    }
+  },
+  "firestore": {
+    "/banners/{bannerId}": { "schema": "Banner", "description": "Coleção de banners" },
+    "/modules/{moduleId}": { "schema": "Module", "description": "Coleção de módulos" },
+    "/teachers/{teacherId}": { "schema": "Teacher", "description": "Coleção de professores" },
+    "/learnings/{learningId}": { "schema": "Learning", "description": "Coleção de aprendizados" },
+    "/testimonials/{testimonialId}": { "schema": "Testimonial", "description": "Coleção de depoimentos" },
+    "/faqs/{faqId}": { "schema": "FAQ", "description": "Coleção de FAQs" },
+    "/settings/global": { "schema": "Settings", "description": "Documento único de configurações" },
+    "/enrollments/{enrollmentId}": { "schema": "Enrollment", "description": "Coleção de matrículas" },
+    "/profiles/{profileId}": { "schema": "Profile", "description": "Coleção de perfis de usuários" },
+    "/student_activity/{activityId}": { "schema": "Activity", "description": "Coleção de atividades" }
+  }
+}

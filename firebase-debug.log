@@ -1,0 +1,12 @@
+[debug] [2026-04-16T13:59:46.196Z] ----------------------------------------------------------------------
+[debug] [2026-04-16T13:59:46.198Z] Command:       /Users/gabrielborba/.nvm/versions/node/v20.19.0/bin/node /Users/gabrielborba/.nvm/versions/node/v20.19.0/bin/firebase login
+[debug] [2026-04-16T13:59:46.198Z] CLI Version:   15.15.0
+[debug] [2026-04-16T13:59:46.198Z] Platform:      darwin
+[debug] [2026-04-16T13:59:46.199Z] Node Version:  v20.19.0
+[debug] [2026-04-16T13:59:46.199Z] Time:          Thu Apr 16 2026 10:59:46 GMT-0300 (Brasilia Standard Time)
+[debug] [2026-04-16T13:59:46.199Z] ----------------------------------------------------------------------
+[debug] 
+[info] i  The Firebase CLI’s MCP server feature can optionally make use of Gemini in Firebase. Learn more about Gemini in Firebase and how it uses your data: https://firebase.google.com/docs/gemini-in-firebase#how-gemini-in-firebase-uses-your-data 
+[debug] [2026-04-16T14:02:40.364Z] Error: read EIO
+    at TTY.onStreamRead (node:internal/stream_base_commons:218:20)
+    at TTY.callbackTrampoline (node:internal/async_hooks:130:17)
