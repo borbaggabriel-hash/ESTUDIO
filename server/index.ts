@@ -1,4 +1,6 @@
 import "dotenv/config";
+import dns from "dns";
+dns.setDefaultResultOrder("ipv4first");
 
 process.on("uncaughtException", (err) => {
   console.error("[Process] uncaughtException — keeping server alive:", err);
