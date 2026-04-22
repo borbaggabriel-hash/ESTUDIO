@@ -6,8 +6,8 @@ WORKDIR /app
 COPY package*.json ./
 COPY client/package*.json ./client/
 
-# Install dependencies
-RUN npm ci --only=production
+# Install ALL dependencies (dev included) so tsx/vite/esbuild are available
+RUN npm ci
 
 # Copy source
 COPY . .
@@ -23,8 +23,10 @@ WORKDIR /app
 # Copy built artifacts
 COPY --from=builder /app/dist ./dist
 COPY --from=builder /app/client/dist ./client/dist
-COPY --from=builder /app/node_modules ./node_modules
 COPY --from=builder /app/package.json ./
+
+# Install only production dependencies in the final image
+RUN npm ci --omit=dev
 
 # Create uploads directory
 RUN mkdir -p /app/public/uploads /app/public/media-jobs /app/public/voice-jobs
