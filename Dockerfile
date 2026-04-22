@@ -22,8 +22,8 @@ WORKDIR /app
 
 # Copy built artifacts
 COPY --from=builder /app/dist ./dist
-COPY --from=builder /app/client/dist ./client/dist
 COPY --from=builder /app/package.json ./
+COPY --from=builder /app/package-lock.json ./
 
 # Install only production dependencies in the final image
 RUN npm ci --omit=dev
