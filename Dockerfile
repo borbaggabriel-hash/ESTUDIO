@@ -6,10 +6,10 @@ WORKDIR /app
 COPY package*.json ./
 COPY client/package*.json ./client/
 
-# Install dependencies
-RUN npm ci --only=production
+# Install ALL deps (devDeps needed for build: tsx, esbuild, vite)
+RUN npm ci
 
-# Copy source
+# Copy source (node_modules excluded via .dockerignore)
 COPY . .
 
 # Build client and server
@@ -20,10 +20,14 @@ FROM node:20-alpine
 
 WORKDIR /app
 
+# Install only prod deps in a clean Linux environment (no Mac binaries)
+COPY package*.json ./
+COPY client/package*.json ./client/
+RUN npm ci --omit=dev
+
 # Copy built artifacts
 COPY --from=builder /app/dist ./dist
 COPY --from=builder /app/client/dist ./client/dist
-COPY --from=builder /app/node_modules ./node_modules
 COPY --from=builder /app/package.json ./
 
 # Create uploads directory
