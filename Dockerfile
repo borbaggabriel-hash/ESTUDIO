@@ -26,8 +26,9 @@ COPY client/package*.json ./client/
 RUN npm ci --omit=dev
 
 # Copy built artifacts
+# dist/index.cjs  → server bundle
+# dist/public/    → Vite frontend (outDir from vite.config.ts)
 COPY --from=builder /app/dist ./dist
-COPY --from=builder /app/client/dist ./client/dist
 COPY --from=builder /app/package.json ./
 
 # Create uploads directory
