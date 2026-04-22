@@ -1,0 +1,7 @@
+client/src/App.tsx
+client/src/components/layout/app-sidebar.tsx
+client/src/components/layout/studio-layout.tsx
+client/src/lib/memory-router.ts
+client/src/pages/login.tsx
+client/src/pages/not-found.tsx
+client/src/pages/studio-select.tsx

@@ -1,0 +1,12 @@
+.DS_Store
+.git_backup/.DS_Store
+.git_backup/lfs/.DS_Store
+.git_backup/objects/.DS_Store
+.git_backup/refs/.DS_Store
+.local/.DS_Store
+.local/skills/.DS_Store
+.local/state/.DS_Store
+client/.DS_Store
+client/src/.DS_Store
+server/.DS_Store
+server/scripts/__pycache__/process_audio.cpython-314.pyc

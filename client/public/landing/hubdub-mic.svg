@@ -1,0 +1,19 @@
+<svg width="800" height="600" viewBox="0 0 800 600" fill="none" xmlns="http://www.w3.org/2000/svg">
+  <rect width="800" height="600" fill="#0f172a" />
+  <!-- Studio Room Glow -->
+  <circle cx="400" cy="300" r="300" fill="radial-gradient(circle, #1e293b 0%, #0f172a 100%)" />
+  <!-- Microphone Stand -->
+  <rect x="390" y="450" width="20" height="150" fill="#475569" rx="10" />
+  <!-- Pop Filter -->
+  <circle cx="400" cy="250" r="100" stroke="#64748b" stroke-width="4" stroke-dasharray="10 5" />
+  <!-- Microphone Body -->
+  <rect x="375" y="150" width="50" height="200" fill="#1e293b" stroke="#334155" stroke-width="8" rx="25" />
+  <rect x="380" y="160" width="40" height="80" fill="#334155" rx="5" />
+  <path d="M380 180 H420" stroke="#475569" stroke-width="2" />
+  <path d="M380 200 H420" stroke="#475569" stroke-width="2" />
+  <path d="M380 220 H420" stroke="#475569" stroke-width="2" />
+  <!-- Blue Glow -->
+  <circle cx="400" cy="200" r="80" fill="#3b82f6" fill-opacity="0.1" blur="20" />
+  <!-- ADR Label -->
+  <text x="400" y="50" text-anchor="middle" fill="#3b82f6" font-family="sans-serif" font-size="24" font-weight="bold" opacity="0.6">ADR STUDIO</text>
+</svg>
