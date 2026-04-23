@@ -2580,7 +2580,7 @@ export default function RecordingRoom() {
           )}
 
           <div className="shrink-0 px-3 sm:px-5 py-3 sm:py-0 flex flex-col sm:flex-row sm:items-center justify-between gap-3 sm:gap-0" style={{ background: "hsl(var(--card))", backdropFilter: "blur(12px)", WebkitBackdropFilter: "blur(12px)", borderTop: "1px solid hsl(var(--border))", boxShadow: "0 -1px 3px rgba(0,0,0,0.04)" }}>
-            <div className="w-full sm:w-56 shrink-0 flex flex-col justify-center gap-1 py-0 sm:py-3">
+            <div className="hidden sm:flex w-full sm:w-56 shrink-0 flex flex-col justify-center gap-1 py-0 sm:py-3">
               <div className="flex items-center justify-between text-[10px] mb-0.5" style={{ color: "hsl(var(--muted-foreground))" }}>
                 <span className="uppercase tracking-wider">
                   {recordingStatus === "recording" ? "Ao Vivo" :
@@ -2617,7 +2617,7 @@ export default function RecordingRoom() {
               />
             </div>
 
-            <div className="w-full flex flex-col sm:flex-row items-center justify-center gap-2">
+            <div className="w-full sm:w-auto flex flex-col sm:flex-row items-center justify-center gap-2">
               <div className="w-full sm:w-auto flex items-center justify-center gap-2">
               <button
                 onClick={() => seek(-2)}
@@ -2711,22 +2711,28 @@ export default function RecordingRoom() {
               </button>
             </div>
 
-            <div className="w-full sm:w-44 shrink-0 flex flex-col items-start sm:items-end gap-1.5">
+            <div className="hidden sm:flex w-full sm:w-44 shrink-0 flex-col items-start sm:items-end gap-1.5">
               {isLooping && loopRange && (
                 <div className="flex flex-col items-end gap-0.5">
                   <div className="flex items-center gap-1.5 text-[10px] font-mono" style={{ color: "hsl(var(--muted-foreground))" }}>
-                    <span style={{ color: "hsl(var(--muted-foreground) / 0.55)" }}>In</span>
-                    <span>{formatTimecode(loopRange.start)}</span>
+                    <span>Loop:</span>
+                    <span>{formatTimecode(loopRange[0])}</span>
+                    <span>→</span>
+                    <span>{formatTimecode(loopRange[1])}</span>
                   </div>
-                  <div className="flex items-center gap-1.5 text-[10px] font-mono" style={{ color: "hsl(var(--muted-foreground))" }}>
-                    <span style={{ color: "hsl(var(--muted-foreground) / 0.55)" }}>Out</span>
-                    <span>{formatTimecode(loopRange.end)}</span>
-                  </div>
+                  <button
+                    onClick={() => {
+                      setLoopSelectionMode("idle");
+                      setCustomLoop(null);
+                      setIsLooping(false);
+                      emitVideoEvent("sync-loop", { loopRange: null });
+                    }}
+                    className="text-[10px] underline" style={{ color: "hsl(var(--muted-foreground))" }}
+                  >
+                    Limpar
+                  </button>
                 </div>
               )}
-              <p className="text-[10px]" style={{ color: "hsl(var(--muted-foreground) / 0.7)" }}>
-                {savedTakes.size} / {scriptLines.length} linhas salvas
-              </p>
             </div>
           </div>
         </div>

@@ -13,9 +13,8 @@ export function TakeWaveformEditor({ audioUrl, durationSeconds, onTrim }: TakeWa
   const audioRef = useRef<HTMLAudioElement | null>(null);
   const [isPlaying, setIsPlaying] = useState(false);
   const [currentTime, setCurrentTime] = useState(0);
-  const [selectionStart, setSelectionStart] = useState(0);
-  const [selectionEnd, setSelectionEnd] = useState(durationSeconds);
-  const [isDragging, setIsDragging] = useState<"start" | "end" | null>(null);
+  const [trimEnd, setTrimEnd] = useState(durationSeconds);
+  const [isDragging, setIsDragging] = useState(false);
   const [audioBuffer, setAudioBuffer] = useState<Float32Array | null>(null);
   const [isTrimming, setIsTrimming] = useState(false);
 
@@ -62,7 +61,7 @@ export function TakeWaveformEditor({ audioUrl, durationSeconds, onTrim }: TakeWa
       color: "#22c55e",
       playedColor: "#3b82f6",
     });
-  }, [audioBuffer, currentTime, durationSeconds]);
+  }, [audioBuffer, currentTime, durationSeconds, trimEnd]);
 
   const handlePlayPause = useCallback(() => {
     if (!audioRef.current) return;
@@ -88,24 +87,15 @@ export function TakeWaveformEditor({ audioUrl, durationSeconds, onTrim }: TakeWa
   }, [durationSeconds]);
 
   const handleCanvasMouseDown = useCallback((e: React.MouseEvent<HTMLCanvasElement>) => {
+    setIsDragging(true);
     const canvas = canvasRef.current;
     if (!canvas) return;
     const rect = canvas.getBoundingClientRect();
     const x = e.clientX - rect.left;
-    const fraction = x / rect.width;
+    const fraction = Math.max(0, Math.min(1, x / rect.width));
     const time = fraction * durationSeconds;
-    
-    const distToStart = Math.abs(time - selectionStart);
-    const distToEnd = Math.abs(time - selectionEnd);
-    
-    if (distToStart < distToEnd) {
-      setIsDragging("start");
-      setSelectionStart(time);
-    } else {
-      setIsDragging("end");
-      setSelectionEnd(time);
-    }
-  }, [durationSeconds, selectionStart, selectionEnd]);
+    setTrimEnd(time);
+  }, [durationSeconds]);
 
   const handleCanvasMouseMove = useCallback((e: React.MouseEvent<HTMLCanvasElement>) => {
     if (!isDragging || !canvasRef.current) return;
@@ -113,16 +103,11 @@ export function TakeWaveformEditor({ audioUrl, durationSeconds, onTrim }: TakeWa
     const x = e.clientX - rect.left;
     const fraction = Math.max(0, Math.min(1, x / rect.width));
     const time = fraction * durationSeconds;
-    
-    if (isDragging === "start") {
-      setSelectionStart(Math.min(time, selectionEnd - 0.1));
-    } else {
-      setSelectionEnd(Math.max(time, selectionStart + 0.1));
-    }
-  }, [isDragging, durationSeconds, selectionStart, selectionEnd]);
+    setTrimEnd(time);
+  }, [isDragging, durationSeconds]);
 
   const handleCanvasMouseUp = useCallback(() => {
-    setIsDragging(null);
+    setIsDragging(false);
   }, []);
 
   const formatTime = (seconds: number) => {
@@ -134,11 +119,11 @@ export function TakeWaveformEditor({ audioUrl, durationSeconds, onTrim }: TakeWa
   const handleTrim = useCallback(async () => {
     setIsTrimming(true);
     try {
-      await onTrim(selectionStart, selectionEnd);
+      await onTrim(0, trimEnd);
     } finally {
       setIsTrimming(false);
     }
-  }, [selectionStart, selectionEnd, onTrim]);
+  }, [trimEnd, onTrim]);
 
   return (
     <div className="flex flex-col gap-2">
@@ -189,32 +174,20 @@ export function TakeWaveformEditor({ audioUrl, durationSeconds, onTrim }: TakeWa
         </span>
       </div>
 
-      <div className="grid grid-cols-2 gap-2">
-        <div>
-          <label className="text-xs text-muted-foreground mb-1 block">Início</label>
-          <input
-            type="number"
-            value={selectionStart.toFixed(2)}
-            onChange={(e) => setSelectionStart(parseFloat(e.target.value))}
-            step={0.1}
-            min={0}
-            max={selectionEnd}
-            className="w-full px-2 py-1 rounded text-xs"
-            style={{ background: "hsl(var(--muted))", border: "1px solid hsl(var(--border))" }}
-          />
-        </div>
-        <div>
-          <label className="text-xs text-muted-foreground mb-1 block">Fim</label>
-          <input
-            type="number"
-            value={selectionEnd.toFixed(2)}
-            onChange={(e) => setSelectionEnd(parseFloat(e.target.value))}
-            step={0.1}
-            min={selectionStart}
-            max={durationSeconds}
-            className="w-full px-2 py-1 rounded text-xs"
-            style={{ background: "hsl(var(--muted))", border: "1px solid hsl(var(--border))" }}
-          />
+      <div>
+        <label className="text-xs text-muted-foreground mb-1 block">Cortar até (segundos)</label>
+        <input
+          type="number"
+          value={trimEnd.toFixed(2)}
+          onChange={(e) => setTrimEnd(parseFloat(e.target.value))}
+          step={0.1}
+          min={0.1}
+          max={durationSeconds}
+          className="w-full px-2 py-1 rounded text-xs"
+          style={{ background: "hsl(var(--muted))", border: "1px solid hsl(var(--border))" }}
+        />
+        <div className="text-xs text-muted-foreground mt-1">
+          Duração final: {formatTime(trimEnd)}
         </div>
       </div>
 
@@ -224,7 +197,7 @@ export function TakeWaveformEditor({ audioUrl, durationSeconds, onTrim }: TakeWa
         className="w-full py-1.5 rounded text-xs font-medium transition-colors disabled:opacity-50"
         style={{ background: "hsl(var(--primary))", color: "hsl(var(--primary-foreground))" }}
       >
-        {isTrimming ? "Cortando..." : `Cortar (${formatTime(selectionEnd - selectionStart)})`}
+        {isTrimming ? "Cortando..." : `Cortar (manter ${formatTime(trimEnd)})`}
       </button>
     </div>
   );
