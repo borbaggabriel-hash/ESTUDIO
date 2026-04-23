@@ -17,8 +17,9 @@
     --room-modal-shadow: 0 8px 40px rgba(0,0,0,0.14), 0 2px 8px rgba(0,0,0,0.06);
     --room-card-bg: rgba(255, 255, 255, 0.80);
     --room-card-border: rgba(0, 0, 0, 0.07);
-    --room-script-active-bg: hsl(217 40% 97.5%);
-    --room-script-active-border: hsl(217 40% 88%);
+    --room-script-active-bg: hsl(217 60% 97%);
+    --room-script-active-border: hsl(217 70% 75%);
+    --room-script-active-accent: hsl(217 80% 58%);
   }
 
 }

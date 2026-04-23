@@ -184,6 +184,30 @@ function RecordingProfilePanel({
   const handleSubmit = async () => {
     if (!actorName.trim()) return;
     if (hasCharacters && selectedChar) {
+      // Se o ID vier do script (não é UUID real), persiste o personagem no banco primeiro
+      if (!UUID_REGEX.test(selectedChar.id)) {
+        setIsCreating(true);
+        try {
+          const created = await authFetch(`/api/productions/${productionId}/characters`, {
+            method: "POST",
+            body: JSON.stringify({ name: selectedChar.name, productionId }),
+          });
+          onSave({
+            voiceActorName: actorName.trim(),
+            characterName: selectedChar.name,
+            characterId: created.id,
+            voiceActorId: user?.id || "",
+            userId: user?.id || "",
+            sessionId,
+            productionId,
+          });
+        } catch (err: any) {
+          toast({ title: "Erro ao criar personagem", description: err?.message || "Tente novamente", variant: "destructive" });
+        } finally {
+          setIsCreating(false);
+        }
+        return;
+      }
       onSave({
         voiceActorName: actorName.trim(),
         characterName: selectedChar.name,
@@ -412,6 +436,45 @@ export default function RecordingRoom() {
     }
   }, [production?.scriptJson]);
 
+  // Personagens extraídos diretamente do scriptJson — usados quando o banco não tem characters cadastrados
+  const scriptCharacters = useMemo(() => {
+    const seen = new Set<string>();
+    const result: Array<{ id: string; name: string; voiceActorId: null }> = [];
+    for (const line of scriptLines) {
+      const name = line.character?.trim();
+      if (!name) continue;
+      const key = name.toLowerCase();
+      if (seen.has(key)) continue;
+      seen.add(key);
+      // ID determinístico baseado no nome — evita criar duplicatas entre renders
+      result.push({ id: `script-char-${key.replace(/\s+/g, "-")}`, name, voiceActorId: null });
+    }
+    return result;
+  }, [scriptLines]);
+
+  // Script é sempre a fonte da verdade; banco fornece UUID real se o personagem já existir pelo nome
+  const effectiveCharactersList = useMemo(() => {
+    if (!scriptCharacters.length) return charactersList || [];
+    const dbByName = new Map(
+      (charactersList || []).map(c => [c.name.toLowerCase().trim(), c])
+    );
+    return scriptCharacters.map(sc => {
+      const dbMatch = dbByName.get(sc.name.toLowerCase().trim());
+      return dbMatch ?? sc;
+    });
+  }, [scriptCharacters, charactersList]);
+
+  // Conjunto de todas as linhas com o mesmo start que currentLine (falas simultâneas)
+  const currentLines = useMemo(() => {
+    const base = scriptLines[currentLine];
+    if (!base) return new Set([currentLine]);
+    const set = new Set<number>();
+    for (let i = 0; i < scriptLines.length; i++) {
+      if (Math.abs((scriptLines[i]?.start ?? -1) - base.start) < 0.1) set.add(i);
+    }
+    return set;
+  }, [scriptLines, currentLine]);
+
   const calculateEndLine = useCallback((startLineIndex: number, durationSeconds: number): number => {
     if (!scriptLines.length || startLineIndex >= scriptLines.length) return startLineIndex;
     
@@ -639,6 +702,9 @@ export default function RecordingRoom() {
   const [lineEdits, setLineEdits] = useState<Record<number, string>>({});
   const [takePreviewId, setTakePreviewId] = useState<string | null>(null);
   const takePreviewAudioRef = useRef<HTMLAudioElement | null>(null);
+  const [takeCacheBust, setTakeCacheBust] = useState<Record<string, number>>({});
+  const [takePreviewProgress, setTakePreviewProgress] = useState(0);
+
 
   // Unified role checks via hook
   const { sessionRole: myStudioRole, isPrivileged, isDirector } = useUserRole({ user, session });
@@ -1278,11 +1344,14 @@ export default function RecordingRoom() {
       const y1 = el1.offsetTop;
       const t0 = lines[idx]?.start ?? 0;
       const t1 = lines[nextIdx]?.start ?? (t0 + 0.5);
-      const denom = Math.max(0.5, t1 - t0);
+      const gap = t1 - t0;
+      const denom = gap <= 3 ? Math.max(4.0, gap) : Math.max(0.5, gap);
       const p = ease((t - t0) / denom);
       const y = y0 + (y1 - y0) * p;
 
-      const focusY = (vp.clientHeight / 2) - (el0.offsetHeight / 2);
+      const focusY0 = (vp.clientHeight / 2) - (el0.offsetHeight / 2);
+      const focusY1 = (vp.clientHeight / 2) - (el1.offsetHeight / 2);
+      const focusY = focusY0 + (focusY1 - focusY0) * p;
       const rawTarget = y - focusY;
       const maxScroll = Math.max(0, vp.scrollHeight - vp.clientHeight);
       return Math.min(maxScroll, Math.max(0, rawTarget));
@@ -2072,7 +2141,7 @@ export default function RecordingRoom() {
 
       {showProfilePanel && session?.productionId && (
         <RecordingProfilePanel
-          characters={charactersList || []}
+          characters={effectiveCharactersList}
           user={user}
           sessionId={sessionId}
           productionId={session.productionId}
@@ -2133,10 +2202,18 @@ export default function RecordingRoom() {
                                 audio.pause();
                                 audio.currentTime = 0;
                                 setTakePreviewId(null);
+                                setTakePreviewProgress(0);
                                 return;
                               }
                               setTakePreviewId(take.id);
-                              audio.src = `/api/takes/${take.id}/stream`;
+                              setTakePreviewProgress(0);
+                              audio.onended = () => { setTakePreviewId(null); setTakePreviewProgress(0); };
+                              audio.ontimeupdate = () => {
+                                if (audio.duration && isFinite(audio.duration)) {
+                                  setTakePreviewProgress(audio.currentTime / audio.duration);
+                                }
+                              };
+                              audio.src = `/api/takes/${take.id}/stream?d=${take.durationSeconds || 0}${takeCacheBust[take.id] ? `&t=${takeCacheBust[take.id]}` : ''}`;
                               audio.play().catch(() => {});
                             }}
                             className="w-9 h-9 rounded-lg flex items-center justify-center transition-colors"
@@ -2193,10 +2270,30 @@ export default function RecordingRoom() {
                             </button>
                           )}
                         </div>
+                        {takePreviewId === take.id && (
+                          <div className="flex items-center gap-2 px-1">
+                            <div
+                              className="flex-1 h-1 rounded-full overflow-hidden cursor-pointer"
+                              style={{ background: "hsl(var(--muted))" }}
+                              onClick={(e) => {
+                                const audio = takePreviewAudioRef.current;
+                                if (!audio || !audio.duration || !isFinite(audio.duration)) return;
+                                const rect = e.currentTarget.getBoundingClientRect();
+                                const frac = Math.max(0, Math.min(1, (e.clientX - rect.left) / rect.width));
+                                audio.currentTime = frac * audio.duration;
+                              }}
+                            >
+                              <div className="h-full rounded-full transition-[width] duration-150" style={{ width: `${(takePreviewProgress * 100).toFixed(1)}%`, background: "hsl(var(--primary))" }} />
+                            </div>
+                            <span className="text-[10px] font-mono tabular-nums shrink-0" style={{ color: "hsl(var(--muted-foreground))" }}>
+                              {(() => { const ct = takePreviewAudioRef.current?.currentTime || 0; const m = Math.floor(ct / 60); const s = Math.floor(ct % 60); return `${m}:${s.toString().padStart(2, '0')}`; })()}
+                            </span>
+                          </div>
+                        )}
                         {isEditing && (
                           <div className="flex flex-col gap-2">
                             <TakeWaveformEditor
-                              audioUrl={take.audioUrl}
+                              audioUrl={`/api/takes/${take.id}/stream?d=${take.durationSeconds || 0}${takeCacheBust[take.id] ? `&t=${takeCacheBust[take.id]}` : ''}`}
                               durationSeconds={take.durationSeconds || 0}
                               onTrim={async (start, end) => {
                                 try {
@@ -2207,6 +2304,8 @@ export default function RecordingRoom() {
                                   });
                                   if (!response.ok) throw new Error("Erro ao cortar take");
                                   await response.json();
+                                  const ts = Date.now();
+                                  setTakeCacheBust(prev => ({ ...prev, [take.id]: ts }));
                                   refetchTakes();
                                   toast({ title: "Take cortado com sucesso" });
                                   setEditingTakeId(null);
@@ -2559,13 +2658,13 @@ export default function RecordingRoom() {
                       key={i}
                       className={`absolute top-0 bottom-0 rounded-sm transition-all ${
                         savedTakes.has(i) ? "bg-emerald-400/70" :
-                        i === currentLine ? "bg-amber-400/70" :
+                        currentLines.has(i) ? "bg-amber-400/70" :
                         ""
                       }`}
                       style={{
                         left: `${(line.start / videoDuration) * 100}%`,
                         width: `${Math.max(0.5, ((line.end! - line.start) / videoDuration) * 100)}%`,
-                        ...(!savedTakes.has(i) && i !== currentLine ? { background: "rgba(255,255,255,0.15)" } : {}),
+                        ...(!savedTakes.has(i) && !currentLines.has(i) ? { background: "rgba(255,255,255,0.15)" } : {}),
                       }}
                     />
                   ))}
@@ -2796,13 +2895,13 @@ export default function RecordingRoom() {
             {scriptLines.length > 1 && (
               <div className="absolute right-1 top-3 bottom-3 w-[3px] rounded-full" style={{ background: "hsl(var(--border))", pointerEvents: "none" }}>
                 <div
-                  className="absolute left-0 right-0 mx-auto w-full rounded-full"
+                  className="absolute left-0 right-0 mx-auto w-full rounded-full transition-[top] duration-500 ease-out"
                   style={{
                     height: 34,
                     top: `${(currentLine / Math.max(1, scriptLines.length - 1)) * 100}%`,
                     transform: "translateY(-50%)",
-                    background: "hsl(var(--primary) / 0.60)",
-                    boxShadow: "0 0 0 1px hsl(var(--primary) / 0.25)",
+                    background: "hsl(var(--primary) / 0.50)",
+                    boxShadow: "0 0 0 1px hsl(var(--primary) / 0.18)",
                   }}
                 />
               </div>
@@ -2823,7 +2922,7 @@ export default function RecordingRoom() {
               .map((line, originalIndex) => ({ line, originalIndex }))
               .filter(({ line }) => !showOnlyMyCharacter || !recordingProfile || line.character.toLowerCase().trim() === recordingProfile.characterName.toLowerCase().trim())
               .map(({ line, originalIndex: i }) => {
-              const isActive = i === currentLine;
+              const isActive = currentLines.has(i);
               const isDone = savedTakes.has(i);
               const isInLoop = customLoop && line.start >= customLoop.start && (line.end || line.start) <= customLoop.end;
               const lineTakes = takesList.filter((t: any) => t.lineIndex === i);
@@ -2832,25 +2931,34 @@ export default function RecordingRoom() {
                   key={i}
                   ref={(el) => { lineRefs.current[i] = el; }}
                   onClick={canTextControl ? (() => handleLineClick(i)) : undefined}
-                  className={`mb-3 px-5 py-4 lg:px-6 lg:py-5 rounded-xl transition-all duration-300 relative overflow-hidden ${canTextControl ? "cursor-pointer" : "cursor-default"}`}
+                  className={`mb-3 px-5 py-4 lg:px-6 lg:py-5 rounded-xl transition-[background,box-shadow,opacity] duration-500 ease-out relative overflow-hidden ${canTextControl ? "cursor-pointer" : "cursor-default"}`}
                   style={{
-                    background: isActive ? "var(--room-script-active-bg)" : (isInLoop ? "hsl(var(--primary) / 0.05)" : "transparent"),
-                    ...(isActive ? { boxShadow: "inset 0 0 0 1px var(--room-script-active-border)" } : {}),
-                    ...(isInLoop && !isActive ? { boxShadow: "inset 0 0 0 1px hsl(var(--primary) / 0.16)" } : {}),
+                    background: isActive
+                      ? "linear-gradient(90deg, var(--room-script-active-bg) 0%, transparent 72%)"
+                      : isInLoop ? "hsl(var(--primary) / 0.04)" : "transparent",
+                    boxShadow: isActive
+                      ? "0 2px 16px hsl(217 60% 60% / 0.07)"
+                      : isInLoop && !isActive ? "inset 0 0 0 1px hsl(var(--primary) / 0.12)" : "none",
                     ...(canTextControl ? {} : { opacity: 0.92 }),
                   }}
                   data-testid={`script-line-${i}`}
                 >
-                  {isInLoop && (
-                    <div className="absolute left-0 top-0 bottom-0 w-1 bg-amber-500/40" />
-                  )}
+                  {/* Acento esquerdo — ativo (azul) ou em loop (âmbar) */}
+                  <div
+                    className="absolute left-0 top-2 bottom-2 rounded-full transition-[width,opacity,background-color] duration-500 ease-out"
+                    style={{
+                      width: isActive ? 3 : isInLoop ? 2 : 0,
+                      opacity: isActive ? 0.65 : isInLoop ? 0.45 : 0,
+                      background: isActive ? "var(--room-script-active-accent)" : "hsl(38 92% 55%)",
+                    }}
+                  />
                   <div className="flex items-center gap-3 mb-2 lg:mb-3">
                     <span className="text-[16px] lg:text-[16px] font-mono tabular-nums font-medium" style={{ color: "hsl(var(--muted-foreground))" }}>
                       {formatTimecode(line.start)}
                     </span>
                     <span
-                      className="text-[24px] lg:text-[32px] font-extrabold uppercase tracking-[0.5px] transition-colors leading-tight"
-                      style={{ color: isActive ? "hsl(var(--primary))" : "hsl(var(--muted-foreground) / 0.50)" }}
+                      className="text-[24px] lg:text-[32px] font-extrabold uppercase tracking-[0.5px] transition-colors duration-500 ease-out leading-tight"
+                      style={{ color: isActive ? "hsl(var(--primary))" : "hsl(var(--muted-foreground) / 0.45)" }}
                     >
                       {line.character}
                     </span>
@@ -2908,9 +3016,10 @@ export default function RecordingRoom() {
                       </div>
                     </div>
                   ) : (
-                    <p className="text-[22px] lg:text-[30px] leading-[1.7] transition-colors" style={{
+                    <p className="text-[22px] lg:text-[30px] leading-[1.7] transition-[color,opacity] duration-500 ease-out" style={{
                       color: isActive ? "hsl(var(--foreground))" : "hsl(var(--muted-foreground))",
                       fontWeight: isActive ? 500 : 400,
+                      opacity: isActive ? 1 : 0.72,
                     }}>
                       {lineEdits[i] ?? line.text}
                     </p>

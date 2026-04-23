@@ -14,6 +14,14 @@ export interface DrawStaticWaveformOpts {
   playheadPosition?: number;
   color?: string;
   playedColor?: string;
+  /** Fração [0..1] de início da região de seleção (corte a manter) */
+  trimStart?: number;
+  /** Fração [0..1] de fim da região de seleção */
+  trimEnd?: number;
+  /** Cor da região fora da seleção (dimmed). Default: rgba escura */
+  dimmedColor?: string;
+  /** Desenhar handles (linhas verticais) nas bordas da seleção */
+  showHandles?: boolean;
 }
 
 export interface DrawVuMeterOpts {
@@ -81,10 +89,21 @@ export function drawStaticWaveform({
   playheadPosition = -1,
   color = "#22c55e",
   playedColor = "#3b82f6",
+  trimStart,
+  trimEnd,
+  dimmedColor = "rgba(113,113,122,0.35)",
+  showHandles = true,
 }: DrawStaticWaveformOpts): void {
   ctx.clearRect(0, 0, width, height);
 
   if (samples.length === 0) return;
+
+  const hasSelection =
+    typeof trimStart === "number" &&
+    typeof trimEnd === "number" &&
+    trimEnd > trimStart;
+  const selStart = hasSelection ? Math.max(0, Math.min(1, trimStart!)) : 0;
+  const selEnd = hasSelection ? Math.max(0, Math.min(1, trimEnd!)) : 1;
 
   const mid = height / 2;
   const buckets = width;
@@ -101,12 +120,45 @@ export function drawStaticWaveform({
       if (s < min) min = s;
     }
 
-    const isPlayed = playheadPosition >= 0 && b / buckets <= playheadPosition;
-    ctx.fillStyle = isPlayed ? playedColor : color;
+    const frac = b / buckets;
+    const insideSelection = !hasSelection || (frac >= selStart && frac <= selEnd);
+    const isPlayed = playheadPosition >= 0 && frac <= playheadPosition;
+
+    if (!insideSelection) {
+      ctx.fillStyle = dimmedColor;
+    } else {
+      ctx.fillStyle = isPlayed ? playedColor : color;
+    }
 
     const top = mid - max * mid;
     const bottom = mid - min * mid;
     ctx.fillRect(b, top, 1, Math.max(1, bottom - top));
+  }
+
+  // Overlay escurecido nas áreas fora da seleção
+  if (hasSelection) {
+    ctx.fillStyle = "rgba(0,0,0,0.35)";
+    if (selStart > 0) {
+      ctx.fillRect(0, 0, Math.round(selStart * width), height);
+    }
+    if (selEnd < 1) {
+      const xEnd = Math.round(selEnd * width);
+      ctx.fillRect(xEnd, 0, width - xEnd, height);
+    }
+
+    if (showHandles) {
+      const handleColor = "#f59e0b";
+      const xs = Math.round(selStart * width);
+      const xe = Math.round(selEnd * width);
+      ctx.fillStyle = handleColor;
+      ctx.fillRect(Math.max(0, xs - 1), 0, 2, height);
+      ctx.fillRect(Math.min(width - 2, xe - 1), 0, 2, height);
+      // Pequenas alças (grip) topo/base
+      ctx.fillRect(Math.max(0, xs - 4), 0, 8, 6);
+      ctx.fillRect(Math.max(0, xs - 4), height - 6, 8, 6);
+      ctx.fillRect(Math.min(width - 8, xe - 4), 0, 8, 6);
+      ctx.fillRect(Math.min(width - 8, xe - 4), height - 6, 8, 6);
+    }
   }
 
   if (playheadPosition >= 0 && playheadPosition <= 1) {

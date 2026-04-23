@@ -22,6 +22,7 @@ import { pool } from "./db";
 import { configureSupabase } from "./lib/supabase";
 import helmet from "helmet";
 import cors from "cors";
+import compression from "compression";
 import path from "path";
 
 const app = express();
@@ -32,6 +33,9 @@ declare module "http" {
     rawBody: unknown;
   }
 }
+
+// Gzip/deflate compression — reduces transfer size by 60-80% for JSON/HTML/JS/CSS
+app.use(compression());
 
 app.use(
   express.json({

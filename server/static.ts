@@ -10,10 +10,24 @@ export function serveStatic(app: Express) {
     );
   }
 
-  app.use(express.static(distPath));
+  // Vite-bundled assets have content hashes in filenames — safe to cache forever
+  const assetsPath = path.resolve(distPath, "assets");
+  if (fs.existsSync(assetsPath)) {
+    app.use("/assets", express.static(assetsPath, {
+      maxAge: "1y",
+      immutable: true,
+    }));
+  }
 
-  // fall through to index.html if the file doesn't exist
+  // Other static files (favicon, etc.) — short cache with revalidation
+  app.use(express.static(distPath, {
+    maxAge: "1h",
+    etag: true,
+  }));
+
+  // fall through to index.html if the file doesn't exist (SPA routing)
   app.use("/{*path}", (_req, res) => {
+    res.setHeader("Cache-Control", "no-cache");
     res.sendFile(path.resolve(distPath, "index.html"));
   });
 }

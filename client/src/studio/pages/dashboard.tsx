@@ -73,7 +73,7 @@ const Dashboard = memo(function Dashboard({ studioId }: { studioId: string }) {
 
         {/* Calendar & Sessions */}
         <div className="relative overflow-hidden rounded-2xl border border-border bg-card p-6 flex flex-col md:flex-row gap-6 transition-all duration-300 hover:border-primary/20 shadow-sm">
-            <div className="flex-shrink-0 mx-auto md:mx-0">
+            <div className="md:w-[40%] flex-shrink-0 mx-auto md:mx-0 flex justify-center">
               <DayPicker
                 mode="single"
                 selected={selectedDate}
@@ -95,7 +95,7 @@ const Dashboard = memo(function Dashboard({ studioId }: { studioId: string }) {
               />
             </div>
 
-            <div className="flex-1 flex flex-col min-w-0">
+            <div className="md:w-[60%] flex-1 flex flex-col min-w-0">
               <div className="flex items-center justify-between mb-4 border-b border-border pb-2">
                 <h3 className="text-lg font-semibold flex items-center gap-2 text-foreground">
                   <PlayCircle className="w-5 h-5 text-primary" />

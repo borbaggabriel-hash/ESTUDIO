@@ -163,7 +163,29 @@ async function getWsIdentity(sessionId: string, req: any, queryUserId?: string |
 export function setupVideoSync(httpServer: Server) {
   const wss = new WebSocketServer({ server: httpServer, path: "/ws/video-sync" });
 
+  // Heartbeat: ping every 25s, terminate if no pong within 10s
+  // Keeps connections alive through proxies/NATs/firewalls with idle timeouts
+  const PING_INTERVAL = 25_000;
+  const PONG_TIMEOUT = 10_000;
+  const aliveMap = new WeakMap<WebSocket, boolean>();
+
+  const heartbeat = setInterval(() => {
+    wss.clients.forEach((ws) => {
+      if (aliveMap.get(ws) === false) {
+        // No pong received since last ping — connection is dead
+        ws.terminate();
+        return;
+      }
+      aliveMap.set(ws, false);
+      ws.ping();
+    });
+  }, PING_INTERVAL);
+
+  wss.on("close", () => clearInterval(heartbeat));
+
   wss.on("connection", (ws: WebSocket & { userId?: string; role?: string; name?: string; sessionId?: string }, req) => {
+    aliveMap.set(ws, true);
+    ws.on("pong", () => aliveMap.set(ws, true));
     (async () => {
       const rawUrl = req.url ?? "";
       const url = new URL(rawUrl, `http://${req.headers.host ?? "localhost"}`);

@@ -1064,22 +1064,17 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       logger.info("[Take Trim] Trimmed buffer", { trimmedSize: trimmedBuffer.length, newDuration });
 
       let newAudioUrl = audioUrl;
-      const settings = await storage.getAllSettings();
-      const storageProvider = settings.DEFAULT_STORAGE_PROVIDER || "local";
-      logger.info("[Take Trim] Storage provider", { storageProvider });
 
-      if (storageProvider === "supabase" && isSupabaseConfigured()) {
-        const supabaseParsed = parseSupabaseStorageUrl(audioUrl);
-        if (supabaseParsed) {
-          const publicUrl = await uploadToSupabaseStorage({
-            bucket: supabaseParsed.bucket,
-            path: supabaseParsed.path,
-            buffer: trimmedBuffer,
-            contentType: "audio/wav",
-          });
-          newAudioUrl = publicUrl;
-          logger.info("[Take Trim] Uploaded to Supabase", { publicUrl });
-        }
+      // Persistir baseado em onde o arquivo está (não na config DEFAULT_STORAGE_PROVIDER)
+      if (supabaseParsed && isSupabaseConfigured()) {
+        const publicUrl = await uploadToSupabaseStorage({
+          bucket: supabaseParsed.bucket,
+          path: supabaseParsed.path,
+          buffer: trimmedBuffer,
+          contentType: "audio/wav",
+        });
+        newAudioUrl = publicUrl;
+        logger.info("[Take Trim] Uploaded to Supabase (same path, replaced)", { publicUrl });
       } else if (audioUrl.startsWith("/uploads/")) {
         const localPath = path.join(process.cwd(), "public", audioUrl);
         logger.info("[Take Trim] Writing to local path", { localPath });
@@ -1087,7 +1082,8 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       }
 
       await storage.updateTakeDuration(takeRecord.id, newDuration);
-      logger.info("[Take Trim] Updated duration", { takeId: takeRecord.id, newDuration });
+      await storage.updateTakeAudioUrl(takeRecord.id, newAudioUrl);
+      logger.info("[Take Trim] Updated duration and audioUrl", { takeId: takeRecord.id, newDuration, newAudioUrl });
 
       res.status(200).json({ audioUrl: newAudioUrl, durationSeconds: newDuration });
     } catch (err: any) {
@@ -1335,6 +1331,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
         const upstream = await fetchAudioResponse(take.audioUrl, range);
         const contentType = upstream.headers.get("content-type") || "application/octet-stream";
         res.status(upstream.status);
+        res.setHeader("Cache-Control", "no-store");
         res.setHeader("Content-Type", contentType);
         const contentLength = upstream.headers.get("content-length");
         if (contentLength) res.setHeader("Content-Length", contentLength);
