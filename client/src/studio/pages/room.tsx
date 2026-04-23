@@ -350,6 +350,18 @@ export default function RecordingRoom() {
   const [preRoll, setPreRoll] = useState(3);
   const [postRoll, setPostRoll] = useState(3);
   const [showOnlyMyCharacter, setShowOnlyMyCharacter] = useState(false);
+  const [scriptFontScale, setScriptFontScale] = useState<number>(() => {
+    try {
+      const v = Number(localStorage.getItem("vhub_script_font_scale"));
+      return isNaN(v) || v === 0 ? 1 : Math.min(2, Math.max(0.6, v));
+    } catch { return 1; }
+  });
+  const [splitRatio, setSplitRatio] = useState<number>(() => {
+    try {
+      const v = Number(localStorage.getItem("vhub_split_ratio"));
+      return isNaN(v) || v === 0 ? 0.625 : Math.min(0.80, Math.max(0.25, v));
+    } catch { return 0.625; }
+  });
 
   const [shortcuts, setShortcuts] = useState<Shortcuts>(() => {
     try {
@@ -630,6 +642,9 @@ export default function RecordingRoom() {
   const recordingStartTimecodeRef = useRef(0);
   const lineRefs = useRef<(HTMLDivElement | null)[]>([]);
   const scriptViewportRef = useRef<HTMLDivElement | null>(null);
+  const splitContainerRef = useRef<HTMLDivElement>(null);
+  const splitRatioRef = useRef(0.625);
+  const isDraggingRef = useRef(false);
   const [scriptAutoFollow, setScriptAutoFollow] = useState(false);
   const scriptAutoFollowRef = useRef(false);
   const scriptProgrammaticScrollRef = useRef(false);
@@ -1270,6 +1285,38 @@ export default function RecordingRoom() {
     if (!scriptUserScrollIntentRef.current) return;
     if (!scriptAutoFollowRef.current) return;
     setScriptAutoFollow(false);
+  }, []);
+
+  useEffect(() => { splitRatioRef.current = splitRatio; }, [splitRatio]);
+
+  const handleDividerPointerDown = useCallback((e: React.PointerEvent<HTMLDivElement>) => {
+    e.preventDefault();
+    const container = splitContainerRef.current;
+    if (!container) return;
+    (e.currentTarget as HTMLElement).setPointerCapture(e.pointerId);
+    document.documentElement.style.cursor = "col-resize";
+    document.documentElement.style.userSelect = "none";
+    isDraggingRef.current = true;
+
+    const onPointerMove = (ev: PointerEvent) => {
+      if (!isDraggingRef.current) return;
+      const rect = container.getBoundingClientRect();
+      const ratio = Math.min(0.80, Math.max(0.25, (ev.clientX - rect.left) / rect.width));
+      splitRatioRef.current = ratio;
+      setSplitRatio(ratio);
+    };
+
+    const onPointerUp = () => {
+      isDraggingRef.current = false;
+      document.documentElement.style.cursor = "";
+      document.documentElement.style.userSelect = "";
+      localStorage.setItem("vhub_split_ratio", String(splitRatioRef.current));
+      document.removeEventListener("pointermove", onPointerMove);
+      document.removeEventListener("pointerup", onPointerUp);
+    };
+
+    document.addEventListener("pointermove", onPointerMove);
+    document.addEventListener("pointerup", onPointerUp);
   }, []);
 
   const scrollScriptToLine = useCallback((idx: number, behavior: ScrollBehavior) => {
@@ -2610,8 +2657,8 @@ export default function RecordingRoom() {
         </div>
       </header>
 
-      <div className="flex-1 grid grid-cols-1 md:grid-cols-[1.25fr_0.75fr] overflow-hidden">
-        <div className="flex flex-col min-h-0 md:border-r md:border-border">
+      <div ref={splitContainerRef} className="flex-1 flex flex-row overflow-hidden">
+        <div className="flex flex-col min-h-0" style={{ width: `${splitRatio * 100}%`, minWidth: "25%", maxWidth: "80%" }}>
           <div className="flex-1 min-h-[240px] relative overflow-hidden" style={{ background: "rgb(10,10,14)", border: "1px solid rgba(0,0,0,0.15)", margin: "4px 4px 0 4px", borderRadius: "12px" }}>
             {production?.videoUrl ? (
               <video
@@ -2813,9 +2860,9 @@ export default function RecordingRoom() {
                 <div className="flex flex-col items-end gap-0.5">
                   <div className="flex items-center gap-1.5 text-[10px] font-mono" style={{ color: "hsl(var(--muted-foreground))" }}>
                     <span>Loop:</span>
-                    <span>{formatTimecode(loopRange[0])}</span>
+                    <span>{formatTimecode(loopRange.start)}</span>
                     <span>→</span>
-                    <span>{formatTimecode(loopRange[1])}</span>
+                    <span>{formatTimecode(loopRange.end)}</span>
                   </div>
                   <button
                     onClick={() => {
@@ -2834,7 +2881,19 @@ export default function RecordingRoom() {
           </div>
         </div>
 
-        <div className="flex flex-col min-h-0 bg-muted/30">
+        {/* Divisória arrastável — oculta em mobile */}
+        <div
+          className="hidden md:flex shrink-0 items-center justify-center cursor-col-resize group relative select-none"
+          style={{ width: 6, background: "hsl(var(--border))" }}
+          onPointerDown={handleDividerPointerDown}
+        >
+          <div
+            className="w-0.5 h-8 rounded-full opacity-0 group-hover:opacity-100 transition-opacity"
+            style={{ background: "hsl(var(--primary) / 0.6)" }}
+          />
+        </div>
+
+        <div className="flex flex-col min-h-0 flex-1 min-w-0 bg-muted/30">
           <div className="h-11 shrink-0 px-5 flex items-center justify-between" style={{ borderBottom: "1px solid hsl(var(--border))", background: "hsl(var(--card))" }}>
             <span className="text-[11px] font-semibold uppercase tracking-widest" style={{ color: "hsl(var(--muted-foreground) / 0.7)" }}>
               Roteiro
@@ -2874,6 +2933,23 @@ export default function RecordingRoom() {
               <span className="text-[10px] hidden sm:inline" style={{ color: "hsl(var(--muted-foreground) / 0.55)" }}>
                 {scriptAutoFollow ? "texto sincronizado" : "texto livre"}
               </span>
+              <div className="w-px h-3" style={{ background: "hsl(var(--border))" }} />
+              <button
+                type="button"
+                onClick={() => { const v = Math.max(0.6, +(scriptFontScale - 0.15).toFixed(2)); setScriptFontScale(v); localStorage.setItem("vhub_script_font_scale", String(v)); }}
+                className="text-[11px] font-bold px-1.5 py-0.5 rounded transition-colors select-none"
+                style={{ background: "hsl(var(--muted))", color: "hsl(var(--muted-foreground))", border: "1px solid hsl(var(--border))", lineHeight: 1 }}
+                title="Diminuir tamanho do texto"
+                disabled={scriptFontScale <= 0.6}
+              >A-</button>
+              <button
+                type="button"
+                onClick={() => { const v = Math.min(2.0, +(scriptFontScale + 0.15).toFixed(2)); setScriptFontScale(v); localStorage.setItem("vhub_script_font_scale", String(v)); }}
+                className="text-[11px] font-bold px-1.5 py-0.5 rounded transition-colors select-none"
+                style={{ background: "hsl(var(--muted))", color: "hsl(var(--muted-foreground))", border: "1px solid hsl(var(--border))", lineHeight: 1 }}
+                title="Aumentar tamanho do texto"
+                disabled={scriptFontScale >= 2.0}
+              >A+</button>
               <span className="text-xs" style={{ color: "hsl(var(--muted-foreground) / 0.7)" }}>
                 <span className="font-mono" style={{ color: "hsl(var(--foreground) / 0.75)" }}>{currentLine + 1}</span>
                 {" "}/{" "}
@@ -2957,8 +3033,8 @@ export default function RecordingRoom() {
                       {formatTimecode(line.start)}
                     </span>
                     <span
-                      className="text-[24px] lg:text-[32px] font-extrabold uppercase tracking-[0.5px] transition-colors duration-500 ease-out leading-tight"
-                      style={{ color: isActive ? "hsl(var(--primary))" : "hsl(var(--muted-foreground) / 0.45)" }}
+                      className="font-extrabold uppercase tracking-[0.5px] transition-colors duration-500 ease-out leading-tight"
+                      style={{ fontSize: Math.round(24 * scriptFontScale), color: isActive ? "hsl(var(--primary))" : "hsl(var(--muted-foreground) / 0.45)" }}
                     >
                       {line.character}
                     </span>
@@ -3016,7 +3092,8 @@ export default function RecordingRoom() {
                       </div>
                     </div>
                   ) : (
-                    <p className="text-[22px] lg:text-[30px] leading-[1.7] transition-[color,opacity] duration-500 ease-out" style={{
+                    <p className="leading-[1.7] transition-[color,opacity] duration-500 ease-out" style={{
+                      fontSize: Math.round(22 * scriptFontScale),
                       color: isActive ? "hsl(var(--foreground))" : "hsl(var(--muted-foreground))",
                       fontWeight: isActive ? 500 : 400,
                       opacity: isActive ? 1 : 0.72,
