@@ -322,6 +322,10 @@ export class DatabaseStorage implements IStorage {
     await db.update(takes).set({ audioUrl }).where(eq(takes.id, takeId));
   }
 
+  async updateTakeDuration(takeId: string, durationSeconds: number): Promise<void> {
+    await db.update(takes).set({ durationSeconds }).where(eq(takes.id, takeId));
+  }
+
   async setPreferredTake(takeId: string): Promise<Take> {
     const [targetTake] = await db.select().from(takes).where(eq(takes.id, takeId));
     if (!targetTake) throw new Error("Take not found");

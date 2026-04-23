@@ -33,6 +33,7 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } f
 import { Button } from "@studio/components/ui/button";
 import { Textarea } from "@studio/components/ui/textarea";
 import { formatTimecode, parseTimecode, parseUniversalTimecodeToSeconds } from "@studio/lib/timecode";
+import { TakeWaveformEditor } from "@studio/components/audio/TakeWaveformEditor";
 import { cn } from "@studio/lib/utils";
 
 import {
@@ -632,6 +633,7 @@ export default function RecordingRoom() {
   const [prerollTargetTime, setPrerollTargetTime] = useState<number | null>(null);
   const [prerollInitiatorUserId, setPrerollInitiatorUserId] = useState<string | null>(null);
   const [takesPopupOpen, setTakesPopupOpen] = useState(false);
+  const [editingTakeId, setEditingTakeId] = useState<string | null>(null);
   const [editingLineIndex, setEditingLineIndex] = useState<number | null>(null);
   const [editingLineText, setEditingLineText] = useState("");
   const [lineEdits, setLineEdits] = useState<Record<number, string>>({});
@@ -1775,13 +1777,14 @@ export default function RecordingRoom() {
         throw new Error(`Falha ao salvar take (${response.status}): ${errorBody}`);
       }
 
-      await response.json();
+      const takeData = await response.json();
 
       clearInterval(progressInterval);
       setUploadProgress(100);
       
       setSavedTakes((prev) => new Set(prev).add(currentLine));
       setTakeCount((prev) => prev + 1);
+      
       cleanupPreview();
       refetchTakes();
       toast({
@@ -1970,7 +1973,7 @@ export default function RecordingRoom() {
                 </div>
               </div>
               <div className="w-full h-2 rounded-full bg-muted overflow-hidden">
-                <div 
+                <div
                   className="h-full bg-primary transition-all duration-300"
                   style={{ width: `${uploadProgress}%` }}
                 />
@@ -1979,6 +1982,7 @@ export default function RecordingRoom() {
           </div>
         </div>
       )}
+
       {/* Cinematic Background */}
       <div className="fixed inset-0 z-0 pointer-events-none">
         <div className="absolute inset-0 bg-[radial-gradient(ellipse_at_center,_var(--tw-gradient-stops))] from-primary/5 via-background to-background opacity-50"></div>
@@ -2111,104 +2115,124 @@ export default function RecordingRoom() {
                     const tb = b.createdAt ? new Date(b.createdAt).getTime() : 0;
                     return ta - tb;
                   });
-                  return sortedTakes.length === 0 ? (
-                    <div className="text-sm text-center py-10" style={{ color: "hsl(var(--muted-foreground) / 0.7)" }}>
+                  if (sortedTakes.length === 0) {
+                    return <div className="text-sm text-center py-10" style={{ color: "hsl(var(--muted-foreground) / 0.7)" }}>
                       Nenhum take gravado nesta sessao
-                    </div>
-                  ) : sortedTakes.map((take: any, takeIdx: number) => (
-                  <div key={take.id} className="flex flex-col gap-2 px-3 py-2 rounded-lg" style={{ background: "hsl(var(--muted) / 0.5)", border: "1px solid hsl(var(--border))" }}>
-                    <div className="flex items-center gap-3">
-                      <button
-                        onClick={() => {
-                          const audio = takePreviewAudioRef.current;
-                          if (!audio) return;
-                          if (takePreviewId === take.id) {
-                            audio.pause();
-                            audio.currentTime = 0;
-                            setTakePreviewId(null);
-                            return;
-                          }
-                          setTakePreviewId(take.id);
-                          audio.src = `/api/takes/${take.id}/stream`;
-                          audio.play().catch(() => {});
-                        }}
-                        className="w-9 h-9 rounded-lg flex items-center justify-center transition-colors"
-                        style={{ background: "hsl(var(--muted))", color: "hsl(var(--foreground) / 0.75)" }}
-                        data-testid={`button-play-take-${take.id}`}
-                      >
-                        {takePreviewId === take.id ? <Pause className="w-4 h-4" /> : <Play className="w-4 h-4 ml-0.5" />}
-                      </button>
-                      <div className="min-w-0 flex-1">
-                        <div className="flex items-center gap-2">
-                          <span className="text-[10px] font-mono tabular-nums px-1.5 py-0.5 rounded" style={{ background: "hsl(var(--muted))", color: "hsl(var(--muted-foreground))" }}>#{takeIdx + 1}</span>
-                          <span className="text-sm font-medium truncate" style={{ color: "hsl(var(--foreground) / 0.85)" }}>
-                            {take.characterName || "Take"}
-                          </span>
-                          <span className="text-xs" style={{ color: "hsl(var(--muted-foreground))" }}>—</span>
-                          <span className="text-xs truncate" style={{ color: "hsl(var(--foreground) / 0.65)" }}>
-                            {take.voiceActorName || take.userName || "Dublador"}
-                          </span>
-                          <span className="ml-auto text-xs font-mono tabular-nums" style={{ color: "hsl(var(--muted-foreground))" }}>
-                            {take.durationSeconds ? `${Number(take.durationSeconds).toFixed(1)}s` : ""}
-                          </span>
+                    </div>;
+                  }
+                  return sortedTakes.map((take: any, takeIdx: number) => {
+                    const isEditing = editingTakeId === take.id;
+                    return (
+                      <div key={take.id} className="flex flex-col gap-3 px-3 py-3 rounded-lg" style={{ background: "hsl(var(--muted) / 0.5)", border: "1px solid hsl(var(--border))" }}>
+                        <div className="flex items-center gap-3">
+                          <button
+                            onClick={() => {
+                              const audio = takePreviewAudioRef.current;
+                              if (!audio) return;
+                              if (takePreviewId === take.id) {
+                                audio.pause();
+                                audio.currentTime = 0;
+                                setTakePreviewId(null);
+                                return;
+                              }
+                              setTakePreviewId(take.id);
+                              audio.src = `/api/takes/${take.id}/stream`;
+                              audio.play().catch(() => {});
+                            }}
+                            className="w-9 h-9 rounded-lg flex items-center justify-center transition-colors"
+                            style={{ background: "hsl(var(--muted))", color: "hsl(var(--foreground) / 0.75)" }}
+                            data-testid={`button-play-take-${take.id}`}
+                          >
+                            {takePreviewId === take.id ? <Pause className="w-4 h-4" /> : <Play className="w-4 h-4 ml-0.5" />}
+                          </button>
+                          <div className="min-w-0 flex-1">
+                            <div className="flex items-center gap-2">
+                              <span className="text-[10px] font-mono tabular-nums px-1.5 py-0.5 rounded" style={{ background: "hsl(var(--muted))", color: "hsl(var(--muted-foreground))" }}>#{takeIdx + 1}</span>
+                              <span className="text-sm font-medium truncate" style={{ color: "hsl(var(--foreground) / 0.85)" }}>
+                                {take.characterName || "Take"}
+                              </span>
+                              <span className="text-xs" style={{ color: "hsl(var(--muted-foreground))" }}>—</span>
+                              <span className="text-xs truncate" style={{ color: "hsl(var(--foreground) / 0.65)" }}>
+                                {take.voiceActorName || take.userName || "Dublador"}
+                              </span>
+                              <span className="ml-auto text-xs font-mono tabular-nums" style={{ color: "hsl(var(--muted-foreground))" }}>
+                                {take.durationSeconds ? `${Number(take.durationSeconds).toFixed(1)}s` : ""}
+                              </span>
+                            </div>
+                            <div className="text-[11px] font-mono mt-1" style={{ color: "hsl(var(--muted-foreground) / 0.8)" }}>
+                              Linhas #{take.lineIndex} → #{calculateEndLine(take.lineIndex, take.durationSeconds || 0)}
+                            </div>
+                          </div>
+                          <button
+                            onClick={() => handleDownloadTake(take)}
+                            className="p-2 rounded-lg transition-colors"
+                            style={{ color: "hsl(var(--muted-foreground))", background: "hsl(var(--muted))" }}
+                            title="Baixar take"
+                            data-testid={`button-download-take-popup-${take.id}`}
+                          >
+                            <Download className="w-4 h-4" />
+                          </button>
+                          {isDirector && (
+                            <button
+                              onClick={async () => {
+                                if (!window.confirm("Excluir este take definitivamente? O arquivo de áudio também será removido do storage.")) return;
+                                try {
+                                  await authFetch(`/api/takes/${take.id}`, { method: "DELETE" });
+                                  toast({ title: "Take excluído", description: "O take e seu arquivo de áudio foram removidos." });
+                                  refetchTakes();
+                                } catch (err: any) {
+                                  toast({ title: "Erro ao excluir", description: err.message, variant: "destructive" });
+                                }
+                              }}
+                              className="p-2 rounded-lg transition-colors"
+                              style={{ color: "hsl(0 72% 55%)", background: "rgba(239,68,68,0.08)" }}
+                              title="Excluir take"
+                              data-testid={`button-delete-take-popup-${take.id}`}
+                            >
+                              <Trash2 className="w-4 h-4" />
+                            </button>
+                          )}
                         </div>
-                        <div className="text-[11px] font-mono mt-1" style={{ color: "hsl(var(--muted-foreground) / 0.8)" }}>
-                          Linhas #{take.lineIndex} → #{calculateEndLine(take.lineIndex, take.durationSeconds || 0)}
-                        </div>
+                        {isEditing && (
+                          <div className="flex flex-col gap-2">
+                            <TakeWaveformEditor
+                              audioUrl={take.audioUrl}
+                              durationSeconds={take.durationSeconds || 0}
+                              onTrim={async (start, end) => {
+                                try {
+                                  const response = await authFetch(`/api/takes/${take.id}/trim`, {
+                                    method: "POST",
+                                    headers: { "Content-Type": "application/json" },
+                                    body: JSON.stringify({ startSeconds: start, endSeconds: end }),
+                                  });
+                                  if (!response.ok) throw new Error("Erro ao cortar take");
+                                  await response.json();
+                                  refetchTakes();
+                                  toast({ title: "Take cortado com sucesso" });
+                                  setEditingTakeId(null);
+                                } catch (err: any) {
+                                  toast({ title: "Erro ao cortar take", description: err?.message, variant: "destructive" });
+                                }
+                              }}
+                            />
+                            <div className="flex gap-2">
+                              <Button size="sm" variant="outline" onClick={() => setEditingTakeId(null)}>
+                                Cancelar
+                              </Button>
+                              <Button size="sm" onClick={() => setEditingTakeId(null)}>
+                                Salvar
+                              </Button>
+                            </div>
+                          </div>
+                        )}
+                        {!isEditing && (
+                          <Button size="sm" variant="outline" className="w-full" onClick={() => setEditingTakeId(take.id)}>
+                            Editar Take
+                          </Button>
+                        )}
                       </div>
-                      <button
-                        onClick={() => handleDownloadTake(take)}
-                        className="p-2 rounded-lg transition-colors"
-                        style={{ color: "hsl(var(--muted-foreground))", background: "hsl(var(--muted))" }}
-                        title="Baixar take"
-                        data-testid={`button-download-take-popup-${take.id}`}
-                      >
-                        <Download className="w-4 h-4" />
-                      </button>
-                      {isDirector && (
-                        <button
-                          onClick={async () => {
-                            if (!window.confirm("Excluir este take definitivamente? O arquivo de áudio também será removido do storage.")) return;
-                            try {
-                              await authFetch(`/api/takes/${take.id}`, { method: "DELETE" });
-                              toast({ title: "Take excluído", description: "O take e seu arquivo de áudio foram removidos." });
-                              refetchTakes();
-                            } catch (err: any) {
-                              toast({ title: "Erro ao excluir", description: err.message, variant: "destructive" });
-                            }
-                          }}
-                          className="p-2 rounded-lg transition-colors"
-                          style={{ color: "hsl(0 72% 55%)", background: "rgba(239,68,68,0.08)" }}
-                          title="Excluir take"
-                          data-testid={`button-delete-take-popup-${take.id}`}
-                        >
-                          <Trash2 className="w-4 h-4" />
-                        </button>
-                      )}
-                    </div>
-                    
-                    {isDirector && take.directorFeedback && (
-                      <div className="text-xs rounded p-2 border-l-2" style={{ background: "hsl(142 72% 96%)", borderColor: "hsl(142 72% 42%)" }}>
-                        <div className="font-medium mb-1" style={{ color: "hsl(160 84% 39%)" }}>✅ Feedback:</div>
-                        <p style={{ color: "hsl(var(--foreground) / 0.70)" }}>{take.directorFeedback}</p>
-                      </div>
-                    )}
-                    
-                    {!isDirector && take.status !== "pending" && take.directorFeedback && (
-                      <div className="text-xs rounded p-2 border-l-2" style={{ 
-                        background: take.status === "approved" ? "hsl(142 72% 96%)" : "hsl(0 84% 97%)", 
-                        borderColor: take.status === "approved" ? "hsl(142 72% 42%)" : "hsl(0 72% 50%)"
-                      }}>
-                        <div className="font-medium mb-1" style={{ 
-                          color: take.status === "approved" ? "hsl(160 84% 39%)" : "hsl(0 72% 50%)"
-                        }}>
-                          {take.status === "approved" ? "✅ Diretor:" : "❌ Diretor:"}
-                        </div>
-                        <p style={{ color: "hsl(var(--foreground) / 0.70)" }}>{take.directorFeedback}</p>
-                      </div>
-                    )}
-                  </div>
-                  ));
+                    );
+                  });
                 })()}
               </div>
             </div>

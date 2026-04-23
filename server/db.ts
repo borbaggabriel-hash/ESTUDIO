@@ -7,7 +7,7 @@ const { Pool } = pg;
 const connectionString = process.env.DATABASE_URL || "postgres://localhost:5432/postgres";
 export const pool = new Pool({
   connectionString,
-  max: 20,
+  max: 5,
   idleTimeoutMillis: 30000,
   connectionTimeoutMillis: 5000,
   ssl: { rejectUnauthorized: false },

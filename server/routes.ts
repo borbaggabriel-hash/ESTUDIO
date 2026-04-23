@@ -36,6 +36,7 @@ import {
   parseSupabaseStorageUrl,
   uploadToSupabaseStorage,
 } from "./lib/supabase";
+import { trimWavBuffer } from "./lib/audio-trim";
 
 const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 50 * 1024 * 1024 } });
 
@@ -878,7 +879,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       const settings = await storage.getAllSettings();
       const storageProvider = (sessionCheck as any).storageProvider || settings.DEFAULT_STORAGE_PROVIDER || "supabase";
       const takesPath = (sessionCheck as any).takesPath || settings.DEFAULT_TAKES_PATH || "uploads";
-      const supabaseBucket = settings.SUPABASE_BUCKET || "takes";
+      const supabaseBucket = settings.SUPABASE_BUCKET || "uploads";
 
       let audioUrl = body.audioUrl || "";
       let contentType = "audio/wav";
@@ -1001,6 +1002,85 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       res.status(200).json(take);
     } catch (err) {
       res.status(404).json({ message: "Take nao encontrado" });
+    }
+  });
+
+  app.post("/api/takes/:id/trim", requireAuth, async (req, res) => {
+    try {
+      const { startSeconds, endSeconds } = req.body;
+      logger.info("[Take Trim] Request", { takeId: req.params.id, startSeconds, endSeconds });
+      
+      if (typeof startSeconds !== "number" || typeof endSeconds !== "number") {
+        return res.status(400).json({ message: "startSeconds e endSeconds sao obrigatorios" });
+      }
+      if (startSeconds < 0 || endSeconds <= startSeconds) {
+        return res.status(400).json({ message: "Range invalido" });
+      }
+
+      const [takeRecord] = await db.select().from(takes).where(eq(takes.id, req.params.id));
+      if (!takeRecord) return res.status(404).json({ message: "Take nao encontrado" });
+
+      const userId = (req.user as any)?.id;
+      const userRole = (req.user as any)?.role;
+      const isAdmin = userRole === "platform_owner" || userRole === "diretor";
+      if (!isAdmin && takeRecord.voiceActorId !== userId) {
+        return res.status(403).json({ message: "Voce so pode editar seus proprios takes" });
+      }
+
+      const audioUrl = (takeRecord as any).audioUrl || "";
+      logger.info("[Take Trim] Audio URL", { audioUrl });
+      if (!audioUrl) return res.status(400).json({ message: "Take nao tem audio" });
+
+      let audioBuffer: Buffer;
+      const supabaseParsed = parseSupabaseStorageUrl(audioUrl);
+      logger.info("[Take Trim] Supabase parsed", { supabaseParsed, isSupabaseConfigured: isSupabaseConfigured() });
+      
+      if (supabaseParsed && isSupabaseConfigured()) {
+        const downloaded = await downloadFromSupabaseStorageUrl(audioUrl);
+        audioBuffer = Buffer.from(await downloaded.arrayBuffer());
+      } else if (audioUrl.startsWith("/uploads/")) {
+        const localPath = path.join(process.cwd(), "public", audioUrl);
+        logger.info("[Take Trim] Local path", { localPath });
+        audioBuffer = fs.readFileSync(localPath);
+      } else {
+        return res.status(400).json({ message: "Audio nao suportado" });
+      }
+
+      logger.info("[Take Trim] Buffer size", { size: audioBuffer.length });
+      const trimmedBuffer = trimWavBuffer(audioBuffer, startSeconds, endSeconds);
+      const newDuration = endSeconds - startSeconds;
+      logger.info("[Take Trim] Trimmed buffer", { trimmedSize: trimmedBuffer.length, newDuration });
+
+      let newAudioUrl = audioUrl;
+      const settings = await storage.getAllSettings();
+      const storageProvider = settings.DEFAULT_STORAGE_PROVIDER || "local";
+      logger.info("[Take Trim] Storage provider", { storageProvider });
+
+      if (storageProvider === "supabase" && isSupabaseConfigured()) {
+        const supabaseParsed = parseSupabaseStorageUrl(audioUrl);
+        if (supabaseParsed) {
+          const publicUrl = await uploadToSupabaseStorage({
+            bucket: supabaseParsed.bucket,
+            path: supabaseParsed.path,
+            buffer: trimmedBuffer,
+            contentType: "audio/wav",
+          });
+          newAudioUrl = publicUrl;
+          logger.info("[Take Trim] Uploaded to Supabase", { publicUrl });
+        }
+      } else if (audioUrl.startsWith("/uploads/")) {
+        const localPath = path.join(process.cwd(), "public", audioUrl);
+        logger.info("[Take Trim] Writing to local path", { localPath });
+        fs.writeFileSync(localPath, trimmedBuffer);
+      }
+
+      await storage.updateTakeDuration(takeRecord.id, newDuration);
+      logger.info("[Take Trim] Updated duration", { takeId: takeRecord.id, newDuration });
+
+      res.status(200).json({ audioUrl: newAudioUrl, durationSeconds: newDuration });
+    } catch (err: any) {
+      logger.error("[Take Trim] Error", { message: err?.message, stack: err?.stack });
+      res.status(500).json({ message: err?.message || "Erro ao cortar take" });
     }
   });
 
@@ -1846,7 +1926,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       supabaseConfigured: isSupabaseConfigured(),
       supabaseOk: status.ok,
       supabaseReason: status.reason || null,
-      supabaseBucket: settings.SUPABASE_BUCKET || "takes",
+      supabaseBucket: settings.SUPABASE_BUCKET || "uploads",
     });
   });
 
@@ -1856,7 +1936,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       return res.status(400).json({ message: status.reason || "Supabase indisponivel" });
     }
     const settings = await storage.getAllSettings();
-    const bucket = settings.SUPABASE_BUCKET || "takes";
+    const bucket = settings.SUPABASE_BUCKET || "uploads";
     const path = `__smoke/${Date.now()}_${randomUUID()}.txt`;
     const marker = `supabase-smoke-${randomUUID()}`;
     const publicUrl = await uploadToSupabaseStorage({
@@ -1904,7 +1984,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       supabaseConfigured: isSupabaseConfigured(),
       supabaseOk: status.ok,
       supabaseReason: status.reason || null,
-      supabaseBucket: settings.SUPABASE_BUCKET || "takes",
+      supabaseBucket: settings.SUPABASE_BUCKET || "uploads",
     });
   });
 

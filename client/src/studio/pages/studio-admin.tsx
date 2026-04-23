@@ -266,7 +266,7 @@ const StudioAdmin = memo(function StudioAdmin({ studioId }: { studioId: string }
           title: newSessionTitle,
           productionId: newSessionProductionId,
           studioId,
-          scheduledAt: newSessionDate,
+          scheduledAt: new Date(newSessionDate).toISOString(),
           durationMinutes: parseInt(newSessionDuration) || 60,
           status: newSessionStatus,
         }),
@@ -971,7 +971,7 @@ const StudioAdmin = memo(function StudioAdmin({ studioId }: { studioId: string }
               disabled={!editSessionForm.title.trim() || updateSessionMutation.isPending}
               onClick={() => editSession && updateSessionMutation.mutate({
                 id: editSession.id,
-                data: { title: editSessionForm.title, scheduledAt: editSessionForm.scheduledAt, durationMinutes: parseInt(editSessionForm.durationMinutes) || 60, status: editSessionForm.status },
+                data: { title: editSessionForm.title, scheduledAt: new Date(editSessionForm.scheduledAt).toISOString(), durationMinutes: parseInt(editSessionForm.durationMinutes) || 60, status: editSessionForm.status },
               })}
               data-testid="button-save-session"
             >
