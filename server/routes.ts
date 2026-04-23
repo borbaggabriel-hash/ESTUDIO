@@ -208,7 +208,8 @@ async function verifyProductionAccess(req: Request, res: Response, productionId:
   const prod = await storage.getProduction(productionId);
   if (!prod) { res.status(404).json({ message: "Producao nao encontrada" }); return null; }
   const user = (req as any).user!;
-  if (user.role === "platform_owner" || (prod as any).isPublic) return prod;
+  const userRole = normalizePlatformRole(user.role);
+  if (userRole === "platform_owner" || userRole === "diretor" || (prod as any).isPublic) return prod;
   const hasAccess = await storage.verifyUserStudioAccess(user.id, prod.studioId);
   if (!hasAccess) { res.status(403).json({ message: "Acesso negado" }); return null; }
   return prod;
@@ -218,7 +219,8 @@ async function verifySessionAccess(req: Request, res: Response, sessionId: strin
   const session = await storage.getSession(sessionId);
   if (!session) { res.status(404).json({ message: "Sessao nao encontrada" }); return null; }
   const user = (req as any).user!;
-  if (user.role === "platform_owner") return session;
+  const userRole = normalizePlatformRole(user.role);
+  if (userRole === "platform_owner" || userRole === "diretor") return session;
   const hasAccess = await storage.verifyUserStudioAccess(user.id, session.studioId);
   if (!hasAccess) { res.status(403).json({ message: "Acesso negado" }); return null; }
   return session;
@@ -361,10 +363,11 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
   // STUDIOS
   app.get("/api/studios", requireAuth, async (req, res) => {
     const user = (req as any).user!;
-    if (normalizePlatformRole(user.role) === "platform_owner") {
+    const userRole = normalizePlatformRole(user.role);
+    if (userRole === "platform_owner" || userRole === "diretor") {
       const allStudios = await storage.getStudios();
       const studiosWithRoles = await Promise.all(
-        allStudios.map(async (s) => ({ ...s, userRoles: ["platform_owner"] }))
+        allStudios.map(async (s) => ({ ...s, userRoles: [userRole] }))
       );
       return res.status(200).json(studiosWithRoles);
     }
@@ -564,6 +567,14 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       }
       await storage.setUserStudioRoles(req.params.membershipId, roles);
       await storage.updateMembershipStatus(req.params.membershipId, "approved", roles[0]);
+      
+      // Update user's global role if "diretor" is selected
+      if (roles.includes("diretor")) {
+        await storage.updateUserRole(membership.userId, "diretor");
+      } else if (roles.includes("studio_admin")) {
+        // Keep as is or set to something else if needed
+      }
+      
       res.status(200).json({ ok: true });
     } catch (err: any) {
       res.status(500).json({ message: err.message || "Erro ao atualizar papeis" });
@@ -804,7 +815,8 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       const userId = (req.user as any)?.id;
       const userRole = (req.user as any)?.role;
       const studioRole = (req as any).studioRole;
-      const isAdmin = userRole === "platform_owner" || studioRole === "studio_admin";
+      const normalizedUserRole = normalizePlatformRole(userRole);
+      const isAdmin = normalizedUserRole === "platform_owner" || normalizedUserRole === "diretor" || studioRole === "studio_admin";
       if (!isAdmin && session.createdBy !== userId) {
         return res.status(403).json({ message: "Voce so pode excluir sessoes criadas por voce" });
       }
@@ -1235,7 +1247,8 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     try {
       const user = (req as any).user!;
       const studioId = req.params.studioId;
-      if (user.role === "platform_owner") {
+      const userRole = normalizePlatformRole(user.role);
+      if (userRole === "platform_owner" || userRole === "diretor") {
         const allTakes = await storage.getAllTakesGrouped();
         return res.status(200).json(allTakes);
       }
@@ -1257,7 +1270,8 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       if (takeList.length === 0) return res.status(404).json({ message: "Take nao encontrado" });
       const take = takeList[0];
       const user = (req as any).user!;
-      if (user.role !== "platform_owner") {
+      const userRole = normalizePlatformRole(user.role);
+      if (userRole !== "platform_owner" && userRole !== "diretor") {
         const isOwner = String(take.voiceActorId || "") === String(user.id || "");
         if (!isOwner) {
           const roles = await storage.getUserRolesInStudio(user.id, take.studioId);
@@ -1266,6 +1280,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
           }
         }
       }
+
       const filename = filenameFromAudioUrl(take.audioUrl, "take.wav").replace(/[^a-zA-Z0-9_.\-]/g, "_");
       res.setHeader("Content-Disposition", `attachment; filename="${filename}"`);
 
@@ -1298,7 +1313,8 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       if (takeList.length === 0) return res.status(404).json({ message: "Take nao encontrado" });
       const take = takeList[0];
       const user = (req as any).user!;
-      if (user.role !== "platform_owner") {
+      const userRole = normalizePlatformRole(user.role);
+      if (userRole !== "platform_owner" && userRole !== "diretor") {
         const isOwner = String(take.voiceActorId || "") === String(user.id || "");
         if (!isOwner) {
           const roles = await storage.getUserRolesInStudio(user.id, take.studioId);
@@ -1400,7 +1416,8 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       const takeList = await storage.getSessionTakesWithDetails(req.params.sessionId);
       if (takeList.length === 0) return res.status(404).json({ message: "Nenhum take nesta sessao" });
       const user = (req as any).user!;
-      if (user.role !== "platform_owner") {
+      const userRole = normalizePlatformRole(user.role);
+      if (userRole !== "platform_owner" && userRole !== "diretor") {
         const roles = await storage.getUserRolesInStudio(user.id, takeList[0].studioId);
         if (!roles.includes("diretor")) {
           return res.status(403).json({ message: "Acesso negado" });
@@ -1442,7 +1459,8 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       const takeList = await storage.getProductionTakesWithDetails(req.params.productionId);
       if (takeList.length === 0) return res.status(404).json({ message: "Nenhum take nesta producao" });
       const user = (req as any).user!;
-      if (user.role !== "platform_owner") {
+      const userRole = normalizePlatformRole(user.role);
+      if (userRole !== "platform_owner" && userRole !== "diretor") {
         const roles = await storage.getUserRolesInStudio(user.id, takeList[0].studioId);
         if (!roles.includes("diretor")) {
           return res.status(403).json({ message: "Acesso negado" });
@@ -1485,7 +1503,8 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       const production = await storage.getProduction(req.params.id);
       if (!production) return res.status(404).json({ message: "Producao nao encontrada" });
       const user = (req as any).user!;
-      if (user.role !== "platform_owner") {
+      const userRole = normalizePlatformRole(user.role);
+      if (userRole !== "platform_owner" && userRole !== "diretor") {
         const roles = await storage.getUserRolesInStudio(user.id, production.studioId);
         if (!roles || roles.length === 0) {
           return res.status(403).json({ message: "Acesso negado" });

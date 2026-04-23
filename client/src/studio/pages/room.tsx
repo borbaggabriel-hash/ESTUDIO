@@ -648,9 +648,9 @@ export default function RecordingRoom() {
   }, [isPrivileged, globalControlEnabled, controlPermissions, user]);
 
   const canTextControl = useMemo(() => {
-    if (isPrivileged) return true;
+    if (isPrivileged || isDirector) return true;
     return Boolean(user?.id && textControllerUserIds.has(user.id));
-  }, [isPrivileged, textControllerUserIds, user?.id]);
+  }, [isPrivileged, isDirector, textControllerUserIds, user?.id]);
 
   const presenceRoster = useMemo(() =>
     presenceUsers.length
@@ -2107,7 +2107,7 @@ export default function RecordingRoom() {
               <audio ref={takePreviewAudioRef} preload="none" />
               <div className="flex flex-col gap-2 max-h-[420px] overflow-y-auto pr-1">
                 {(() => {
-                  const visibleTakes = isPrivileged
+                  const visibleTakes = (isPrivileged || isDirector)
                     ? takesList
                     : takesList.filter((t: any) => t.voiceActorId === user?.id || t.userId === user?.id);
                   const sortedTakes = [...visibleTakes].sort((a: any, b: any) => {
@@ -2388,7 +2388,7 @@ export default function RecordingRoom() {
               <Circle className="w-2 h-2 fill-red-500 animate-pulse" /> REC
             </span>
           )}
-          {recordingStatus === "recorded" && isPrivileged && (
+          {recordingStatus === "recorded" && (isPrivileged || isDirector) && (
             <span className="flex items-center gap-1.5 text-xs px-2 py-0.5 rounded-full" style={{ color: "hsl(217 91% 60%)", background: "rgba(59,130,246,0.12)", border: "1px solid rgba(59,130,246,0.25)" }}>
               <AlertCircle className="w-3 h-3" /> Nao salvo
             </span>
@@ -2397,7 +2397,7 @@ export default function RecordingRoom() {
 
         <div className="relative -mx-2 px-2 sm:mx-0 sm:px-0 overflow-x-auto" style={{ WebkitOverflowScrolling: "touch" as any }}>
           <div className="flex items-center gap-3 text-xs whitespace-nowrap">
-          {isPrivileged && (
+          {(isPrivileged || isDirector) && (
             <>
               <button
                 onClick={() => {
@@ -2478,7 +2478,7 @@ export default function RecordingRoom() {
             </button>
           )}
           <div className="hidden sm:block w-px h-4" style={{ background: "hsl(var(--border))" }} />
-          {isPrivileged && (
+          {(isPrivileged || isDirector) && (
             <button
               onClick={() => setTakesPopupOpen(true)}
               className="transition-colors"

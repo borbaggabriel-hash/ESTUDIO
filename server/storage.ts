@@ -165,6 +165,11 @@ export class DatabaseStorage implements IStorage {
     return updated;
   }
 
+  async updateUserRole(id: string, role: string): Promise<User> {
+    const [updated] = await db.update(users).set({ role }).where(eq(users.id, id)).returning();
+    return updated;
+  }
+
   async getUserProfile(userId: string): Promise<any> {
     const [row] = await db.select().from(userProfiles).where(eq(userProfiles.userId, userId));
     return row?.data || {};
