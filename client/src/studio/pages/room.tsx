@@ -2617,8 +2617,7 @@ export default function RecordingRoom() {
               />
             </div>
 
-            <div className="w-full sm:w-auto flex flex-col sm:flex-row items-center justify-center gap-2">
-              <div className="w-full sm:w-auto flex items-center justify-center gap-2">
+            <div className="w-full sm:w-auto flex flex-row sm:flex-row items-center justify-center gap-2">
               <button
                 onClick={() => seek(-2)}
                 className="w-8 h-8 sm:w-9 sm:h-9 rounded-xl flex items-center justify-center transition-all" style={{ color: "hsl(var(--muted-foreground))", background: "hsl(var(--muted))" }}
@@ -2647,7 +2646,6 @@ export default function RecordingRoom() {
               </button>
 
               <div className="hidden sm:block w-px h-8 mx-1" style={{ background: "hsl(var(--border))" }} />
-              </div>
 
               {recordingStatus === "idle" || recordingStatus === "countdown" ? (
                 <button
@@ -2746,7 +2744,7 @@ export default function RecordingRoom() {
               <button
                 type="button"
                 onClick={() => setShowOnlyMyCharacter(!showOnlyMyCharacter)}
-                className="text-[10px] font-semibold px-2 py-1 rounded-full transition-colors flex items-center gap-1.5"
+                className="text-[10px] font-semibold px-1.5 py-1 rounded-full transition-colors flex items-center gap-1"
                 style={showOnlyMyCharacter
                   ? { background: "hsl(var(--primary) / 0.10)", color: "hsl(var(--primary))", border: "1px solid hsl(var(--primary) / 0.25)" }
                   : { background: "hsl(var(--muted))", color: "hsl(var(--muted-foreground))", border: "1px solid hsl(var(--border))" }
@@ -2755,13 +2753,14 @@ export default function RecordingRoom() {
                 title={showOnlyMyCharacter ? `Mostrando apenas ${recordingProfile?.characterName || "personagem"}` : "Filtrar por personagem"}
               >
                 <User className="w-3 h-3" />
+                <span className="sm:hidden">Pers</span>
                 <span className="hidden sm:inline">Apenas personagem</span>
               </button>
               <div className="w-px h-3" style={{ background: "hsl(var(--border))" }} />
               <button
                 type="button"
                 onClick={() => { setScriptAutoFollow(true); scrollScriptToLine(currentLine, "smooth"); }}
-                className="text-[10px] font-semibold px-2 py-1 rounded-full transition-colors flex items-center gap-1.5"
+                className="text-[10px] font-semibold px-1.5 py-1 rounded-full transition-colors flex items-center gap-1"
                 style={scriptAutoFollow
                   ? { background: "hsl(var(--primary) / 0.10)", color: "hsl(var(--primary))", border: "1px solid hsl(var(--primary) / 0.25)" }
                   : { background: "hsl(var(--muted))", color: "hsl(var(--muted-foreground))", border: "1px solid hsl(var(--border))" }
@@ -2770,6 +2769,7 @@ export default function RecordingRoom() {
                 title={scriptAutoFollow ? "Sincronizacao ativa" : "Ativar sincronizacao"}
               >
                 <Navigation className="w-3 h-3" />
+                <span className="sm:hidden">Sync</span>
                 <span className="hidden sm:inline">SEGUIR</span>
               </button>
               <span className="text-[10px] hidden sm:inline" style={{ color: "hsl(var(--muted-foreground) / 0.55)" }}>
