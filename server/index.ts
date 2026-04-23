@@ -22,7 +22,6 @@ import { pool } from "./db";
 import { configureSupabase } from "./lib/supabase";
 import helmet from "helmet";
 import cors from "cors";
-import rateLimit from "express-rate-limit";
 import path from "path";
 
 const app = express();
@@ -54,27 +53,6 @@ app.use(helmet({
 app.use(cors({
   origin: process.env.CORS_ORIGIN || true, // Allow all in dev, restrict via env in prod
   credentials: true,
-}));
-
-// Rate limiting - auth routes (strict). Skip in development to avoid HMR false-positives.
-const isProd = process.env.NODE_ENV === "production";
-app.use("/api/auth", rateLimit({
-  windowMs: 15 * 60 * 1000,
-  max: isProd ? 30 : 1000,
-  message: { message: "Muitas tentativas, tente novamente mais tarde" },
-  standardHeaders: true,
-  legacyHeaders: false,
-  skip: () => !isProd,
-}));
-
-// Rate limiting - general API (relaxed)
-app.use("/api", rateLimit({
-  windowMs: 15 * 60 * 1000,
-  max: isProd ? 300 : 5000,
-  message: { message: "Limite de requisicoes excedido" },
-  standardHeaders: true,
-  legacyHeaders: false,
-  skip: () => !isProd,
 }));
 
 // Serve uploaded audio files
