@@ -1950,14 +1950,12 @@ export default function RecordingRoom() {
   }, [cleanupPreview, toast]);
 
   const handleApprovalTrim = useCallback(async (startSec: number, endSec: number) => {
-    if (!pendingApprovalTake) return;
+    if (!pendingApprovalTake?.takeId) return;
     try {
-      const res = await authFetch(`/api/takes/${pendingApprovalTake.takeId}/trim`, {
+      const data = await authFetch(`/api/takes/${pendingApprovalTake.takeId}/trim`, {
         method: "POST",
         body: JSON.stringify({ startSeconds: startSec, endSeconds: endSec }),
       });
-      if (!res.ok) throw new Error(await res.text());
-      const data = await res.json();
       const bustUrl = data.audioUrl + (data.audioUrl.includes("?") ? `&v=${Date.now()}` : `?v=${Date.now()}`);
       setPendingApprovalTake(prev => prev ? { ...prev, audioUrl: bustUrl, durationSeconds: data.durationSeconds } : null);
       // Clamp approvalOffset so block stays within new take length
