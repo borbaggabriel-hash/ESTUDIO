@@ -1138,6 +1138,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     userRole: string,
     feedback?: string | null,
     setAsFinal?: boolean,
+    startTimeSeconds?: number,
   ) {
     const [take] = await db.select().from(takes).where(eq(takes.id, takeId));
     if (!take) return { error: "Take nao encontrado", status: 404 };
@@ -1168,7 +1169,12 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       reviewedBy: userId,
       reviewedAt: new Date(),
     };
-    if (action === "approved") updatePayload.isFinal = setAsFinal || false;
+    if (action === "approved") {
+      updatePayload.isFinal = setAsFinal || false;
+      if (startTimeSeconds !== undefined && startTimeSeconds >= 0) {
+        updatePayload.startTimeSeconds = startTimeSeconds;
+      }
+    }
 
     const [updated] = await db.update(takes).set(updatePayload).where(eq(takes.id, takeId)).returning();
 
@@ -1213,8 +1219,8 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     try {
       const userId = (req.user as any)?.id;
       if (!userId) return res.status(401).json({ error: "Nao autorizado" });
-      const { feedback, setAsFinal } = req.body;
-      const result = await reviewTake("approved", req.params.takeId, userId, (req.user as any)?.role, feedback, setAsFinal);
+      const { feedback, setAsFinal, startTimeSeconds } = req.body;
+      const result = await reviewTake("approved", req.params.takeId, userId, (req.user as any)?.role, feedback, setAsFinal, startTimeSeconds !== undefined ? Number(startTimeSeconds) : undefined);
       if (result.error) return res.status(result.status!).json({ error: result.error });
       res.json(result.data);
     } catch (err: any) {

@@ -34,6 +34,7 @@ import { Button } from "@studio/components/ui/button";
 import { Textarea } from "@studio/components/ui/textarea";
 import { formatTimecode, parseTimecode, parseUniversalTimecodeToSeconds } from "@studio/lib/timecode";
 import { TakeWaveformEditor } from "@studio/components/audio/TakeWaveformEditor";
+import { AudioTimelinePositioner } from "@studio/components/audio/AudioTimelinePositioner";
 import { cn } from "@studio/lib/utils";
 
 import {
@@ -636,7 +637,9 @@ export default function RecordingRoom() {
   } | null>(null);
   const [approvalStatus, setApprovalStatus] = useState<'pending' | 'approved' | 'rejected' | null>(null);
   const [directorFeedback, setDirectorFeedback] = useState<string>('');
+  const [approvalOffset, setApprovalOffset] = useState<number>(0);
   const approvalAudioRef = useRef<HTMLAudioElement | null>(null);
+  const approvalPreviewCleanupRef = useRef<(() => void) | null>(null);
 
   const videoRef = useRef<HTMLVideoElement>(null);
   const recordingStartTimecodeRef = useRef(0);
@@ -979,23 +982,27 @@ export default function RecordingRoom() {
           if (msg.type === "take:pending-approval") {
             // Director receives notification of new take to approve
             if (isDirector && msg.voiceActorId !== user?.id) {
+              const incomingStart = msg.startTimeSeconds ?? 0;
               setPendingApprovalTake({
                 takeId: msg.takeId ?? "",
                 audioUrl: msg.audioUrl ?? "",
-                startTimeSeconds: msg.startTimeSeconds ?? 0,
+                startTimeSeconds: incomingStart,
                 durationSeconds: msg.durationSeconds ?? 0,
                 lineIndex: msg.lineIndex ?? 0,
                 characterName: msg.characterName ?? "",
                 voiceActorName: msg.voiceActorName ?? "",
                 voiceActorId: msg.voiceActorId ?? "",
               });
+              setApprovalOffset(incomingStart);
+              setApprovalStatus(null);
+              setDirectorFeedback("");
             }
             return;
           }
 
           if (msg.type === "take:approved") {
             queryClient.invalidateQueries({ queryKey: ["/api/sessions", sessionId, "takes"] });
-            if (msg.voiceActorId === user?.id) {
+            if (msg.voiceActorId === user?.id && !isDirector) {
               // Update voice actor's popup to show approval
               setApprovalStatus('approved');
               setDirectorFeedback(msg.feedback || '');
@@ -1005,7 +1012,7 @@ export default function RecordingRoom() {
 
           if (msg.type === "take:rejected") {
             queryClient.invalidateQueries({ queryKey: ["/api/sessions", sessionId, "takes"] });
-            if (msg.voiceActorId === user?.id) {
+            if (msg.voiceActorId === user?.id && !isDirector) {
               // Update voice actor's popup to show rejection
               setApprovalStatus('rejected');
               setDirectorFeedback(msg.feedback || '');
@@ -1656,10 +1663,39 @@ export default function RecordingRoom() {
       return;
     }
 
-    // Auto-save the take
-    setIsSaving(true);
+    // ➊ Encode synchronously so the popup can open immediately (no upload wait)
     setRecordingStatus("idle");
-    
+    const metrics = analyzeTakeQuality(result.samples);
+    setQualityMetrics(metrics);
+    setLastRecording(result);
+    const wavBuffer = encodeWav(result.samples);
+    const blob = wavToBlob(wavBuffer);
+    const durationSeconds = getDurationSeconds(result.samples);
+    const tc = Math.max(0, recordingStartTimecodeRef.current);
+    const blobUrl = createPreviewUrl(blob);
+
+    // ➋ Show approval popup immediately with local blob URL (takeId '' while uploading)
+    setPendingApprovalTake({
+      takeId: '',
+      audioUrl: blobUrl,
+      startTimeSeconds: tc,
+      durationSeconds,
+      lineIndex: currentLine,
+      characterName: recordingProfile.characterName,
+      voiceActorName: recordingProfile.voiceActorName,
+      voiceActorId: user?.id || '',
+    });
+    if (isDirector) {
+      setApprovalOffset(tc);
+      setApprovalStatus(null);
+      setDirectorFeedback('');
+    } else {
+      setApprovalStatus('pending');
+    }
+    setPreviewUrl(blobUrl);
+
+    // ➌ Upload in background — popup is already visible
+    setIsSaving(true);
     try {
       let activeProfile = recordingProfile;
       const charExistsInProduction = charactersList?.some((c: any) => c.id === activeProfile.characterId);
@@ -1669,6 +1705,8 @@ export default function RecordingRoom() {
         if (!session?.productionId || !activeProfile.characterName?.trim()) {
           setShowProfilePanel(true);
           toast({ title: "Perfil invalido", description: "Reconfigure seu personagem antes de salvar.", variant: "destructive" });
+          setPendingApprovalTake(null);
+          setApprovalStatus(null);
           setIsSaving(false);
           return;
         }
@@ -1682,19 +1720,13 @@ export default function RecordingRoom() {
           localStorage.setItem(`vhub_rec_profile_${sessionId}`, JSON.stringify(activeProfile));
         } catch (err: any) {
           toast({ title: "Erro ao criar personagem", description: err?.message || "Tente novamente", variant: "destructive" });
+          setPendingApprovalTake(null);
+          setApprovalStatus(null);
           setIsSaving(false);
           return;
         }
       }
 
-      const metrics = analyzeTakeQuality(result.samples);
-      setQualityMetrics(metrics);
-      setLastRecording(result);
-      const wavBuffer = encodeWav(result.samples);
-      const blob = wavToBlob(wavBuffer);
-      const durationSeconds = getDurationSeconds(result.samples);
-
-      const tc = Math.max(0, recordingStartTimecodeRef.current);
       const tcMs = Math.round(tc * 1000);
       const hh = String(Math.floor(tcMs / 3600000)).padStart(2, "0");
       const mm = String(Math.floor((tcMs % 3600000) / 60000)).padStart(2, "0");
@@ -1728,32 +1760,21 @@ export default function RecordingRoom() {
 
       const savedTake = await response.json();
 
-      // Create preview URL for director
-      const url = createPreviewUrl(blob);
-
-      // Set pending approval state
-      setPendingApprovalTake({
+      // Update popup with real takeId and server URL — enables approve/reject buttons
+      setPendingApprovalTake(prev => prev ? {
+        ...prev,
         takeId: savedTake.id,
-        audioUrl: savedTake.audioUrl || url,
-        startTimeSeconds: tc,
-        durationSeconds: durationSeconds,
-        lineIndex: currentLine,
-        characterName: activeProfile.characterName,
-        voiceActorName: activeProfile.voiceActorName,
-        voiceActorId: user?.id || '',
-      });
-      
-      setApprovalStatus('pending');
-      setPreviewUrl(url);
+        audioUrl: savedTake.audioUrl || prev.audioUrl,
+      } : null);
 
-      // Emit WebSocket for directors
+      // Emit WebSocket for other directors in the room
       emitVideoEvent("take:pending-approval", {
         takeId: savedTake.id,
         voiceActorId: user?.id,
         voiceActorName: activeProfile.voiceActorName,
         characterName: activeProfile.characterName,
         lineIndex: currentLine,
-        audioUrl: savedTake.audioUrl || url,
+        audioUrl: savedTake.audioUrl || blobUrl,
         startTimeSeconds: tc,
         durationSeconds: durationSeconds,
       });
@@ -1769,10 +1790,12 @@ export default function RecordingRoom() {
         description: err?.message || "Nao foi possivel salvar o take.",
         variant: "destructive",
       });
+      setPendingApprovalTake(null);
+      setApprovalStatus(null);
     } finally {
       setIsSaving(false);
     }
-  }, [micState, recordingStatus, toast, pauseVideo, recordingProfile, charactersList, session, sessionId, currentLine, user, emitVideoEvent, refetchTakes]);
+  }, [micState, recordingStatus, toast, pauseVideo, recordingProfile, charactersList, session, sessionId, currentLine, user, emitVideoEvent, refetchTakes, isDirector]);
 
   const handlePreview = useCallback(() => {
     if (!previewUrl) return;
@@ -1926,28 +1949,54 @@ export default function RecordingRoom() {
     toast({ title: "Take descartado" });
   }, [cleanupPreview, toast]);
 
+  const handleApprovalTrim = useCallback(async (startSec: number, endSec: number) => {
+    if (!pendingApprovalTake) return;
+    try {
+      const res = await authFetch(`/api/takes/${pendingApprovalTake.takeId}/trim`, {
+        method: "POST",
+        body: JSON.stringify({ startSeconds: startSec, endSeconds: endSec }),
+      });
+      if (!res.ok) throw new Error(await res.text());
+      const data = await res.json();
+      const bustUrl = data.audioUrl + (data.audioUrl.includes("?") ? `&v=${Date.now()}` : `?v=${Date.now()}`);
+      setPendingApprovalTake(prev => prev ? { ...prev, audioUrl: bustUrl, durationSeconds: data.durationSeconds } : null);
+      // Clamp approvalOffset so block stays within new take length
+      const newMax = Math.max(0, videoDuration - data.durationSeconds);
+      setApprovalOffset(prev => Math.min(prev, newMax));
+      toast({ title: "Take cortado", description: `Nova duração: ${data.durationSeconds.toFixed(1)}s` });
+    } catch (err: any) {
+      toast({ title: "Erro ao cortar take", description: err.message, variant: "destructive" });
+    }
+  }, [pendingApprovalTake, videoDuration, toast]);
+
   const handleDirectorPreview = useCallback(() => {
     const video = videoRef.current;
     if (!video || !pendingApprovalTake) return;
 
+    // Properly tear down any previous preview (removes stale event listeners + restores volume)
+    if (approvalPreviewCleanupRef.current) {
+      approvalPreviewCleanupRef.current();
+      approvalPreviewCleanupRef.current = null;
+    }
     if (approvalAudioRef.current) {
       approvalAudioRef.current.pause();
       approvalAudioRef.current = null;
     }
 
     video.volume = 0;
-    video.currentTime = pendingApprovalTake.startTimeSeconds;
+    video.currentTime = approvalOffset;
 
     const audio = new Audio(pendingApprovalTake.audioUrl);
     approvalAudioRef.current = audio;
 
-    const endTime = pendingApprovalTake.startTimeSeconds + pendingApprovalTake.durationSeconds;
+    const endTime = approvalOffset + pendingApprovalTake.durationSeconds;
     let timeoutId: NodeJS.Timeout | null = null;
     let hasCleanedUp = false;
 
     const cleanup = () => {
       if (hasCleanedUp) return;
       hasCleanedUp = true;
+      approvalPreviewCleanupRef.current = null;
       if (timeoutId) clearTimeout(timeoutId);
       video.removeEventListener("play", syncPlay);
       video.removeEventListener("pause", syncPause);
@@ -1959,12 +2008,12 @@ export default function RecordingRoom() {
 
     const checkEnd = () => { if (video.currentTime >= endTime) { video.pause(); cleanup(); } };
     const syncPlay = () => {
-      const offset = video.currentTime - pendingApprovalTake.startTimeSeconds;
+      const offset = video.currentTime - approvalOffset;
       if (offset >= 0 && offset <= pendingApprovalTake.durationSeconds) { audio.currentTime = offset; audio.play().catch(() => {}); }
     };
     const syncPause = () => { audio.pause(); };
     const syncSeek = () => {
-      const offset = video.currentTime - pendingApprovalTake.startTimeSeconds;
+      const offset = video.currentTime - approvalOffset;
       if (offset >= 0 && offset <= pendingApprovalTake.durationSeconds) { audio.currentTime = offset; } else { audio.pause(); }
     };
 
@@ -1978,29 +2027,42 @@ export default function RecordingRoom() {
       if (!hasCleanedUp && video.currentTime >= endTime - 0.1) { video.pause(); cleanup(); }
     }, pendingApprovalTake.durationSeconds * 1000 + 200);
 
+    approvalPreviewCleanupRef.current = cleanup;
     video.play().then(() => { audio.play().catch(() => {}); }).catch(() => {});
-  }, [pendingApprovalTake]);
+  }, [pendingApprovalTake, approvalOffset]);
 
   const handleTakeDecision = useCallback(async (action: "approve" | "reject", feedback: string) => {
     if (!pendingApprovalTake) return;
+    if (!pendingApprovalTake.takeId) {
+      toast({ title: "Aguarde o upload", description: "O áudio ainda está sendo enviado. Tente em instantes.", variant: "destructive" });
+      return;
+    }
     const body = action === "approve"
-      ? { feedback, setAsFinal: false }
+      ? { feedback, setAsFinal: false, startTimeSeconds: approvalOffset }
       : { feedback: feedback || "Sem feedback" };
+    const takeId = pendingApprovalTake.takeId;
+
+    // Optimistic close — popup fecha imediatamente, API chama em background
+    setPendingApprovalTake(null);
+    setApprovalStatus(null);
+    setDirectorFeedback("");
+    cleanupPreview();
+
     try {
-      await authFetch(`/api/takes/${pendingApprovalTake.takeId}/${action}`, {
+      await authFetch(`/api/takes/${takeId}/${action}`, {
         method: "PATCH",
         body: JSON.stringify(body),
       });
-      setPendingApprovalTake(null);
-      setApprovalStatus(null);
-      setDirectorFeedback("");
-      cleanupPreview();
-      toast({ title: action === "approve" ? "Take aprovado!" : "Take rejeitado", description: "Dublador foi notificado." });
+      // Rejected takes are deleted from DB + storage after the WS notification is sent
+      if (action === "reject") {
+        await authFetch(`/api/takes/${takeId}`, { method: "DELETE" });
+      }
+      toast({ title: action === "approve" ? "Take aprovado!" : "Take rejeitado e excluído", description: action === "approve" ? "Dublador foi notificado." : "Take removido da lista." });
       refetchTakes();
     } catch (err: any) {
       toast({ title: action === "approve" ? "Erro ao aprovar" : "Erro ao rejeitar", description: err.message, variant: "destructive" });
     }
-  }, [pendingApprovalTake, toast, cleanupPreview, refetchTakes]);
+  }, [pendingApprovalTake, approvalOffset, toast, cleanupPreview, refetchTakes]);
 
   useEffect(() => {
     if (isCustomizing) return;
@@ -2076,8 +2138,8 @@ export default function RecordingRoom() {
   return (
     <div className="h-screen w-screen overflow-hidden flex flex-col select-none relative bg-background text-foreground">
 
-      {/* Upload Progress Overlay */}
-      {isSaving && (
+      {/* Upload Progress Overlay — hidden when approval popup is open (upload runs in background) */}
+      {isSaving && !pendingApprovalTake && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 backdrop-blur-sm">
           <div className="rounded-xl p-6 w-80" style={{ background: "var(--room-modal-bg)", border: "1px solid hsl(var(--border))", boxShadow: "var(--room-modal-shadow)" }}>
             <div className="flex flex-col gap-3">
@@ -2229,7 +2291,7 @@ export default function RecordingRoom() {
                   const sortedTakes = [...visibleTakes].sort((a: any, b: any) => {
                     const ta = a.createdAt ? new Date(a.createdAt).getTime() : 0;
                     const tb = b.createdAt ? new Date(b.createdAt).getTime() : 0;
-                    return ta - tb;
+                    return tb - ta;
                   });
                   if (sortedTakes.length === 0) {
                     return <div className="text-sm text-center py-10" style={{ color: "hsl(var(--muted-foreground) / 0.7)" }}>
@@ -2944,11 +3006,10 @@ export default function RecordingRoom() {
               >A-</button>
               <button
                 type="button"
-                onClick={() => { const v = Math.min(2.0, +(scriptFontScale + 0.15).toFixed(2)); setScriptFontScale(v); localStorage.setItem("vhub_script_font_scale", String(v)); }}
+                onClick={() => { const v = +(scriptFontScale + 0.15).toFixed(2); setScriptFontScale(v); localStorage.setItem("vhub_script_font_scale", String(v)); }}
                 className="text-[11px] font-bold px-1.5 py-0.5 rounded transition-colors select-none"
                 style={{ background: "hsl(var(--muted))", color: "hsl(var(--muted-foreground))", border: "1px solid hsl(var(--border))", lineHeight: 1 }}
                 title="Aumentar tamanho do texto"
-                disabled={scriptFontScale >= 2.0}
               >A+</button>
               <span className="text-xs" style={{ color: "hsl(var(--muted-foreground) / 0.7)" }}>
                 <span className="font-mono" style={{ color: "hsl(var(--foreground) / 0.75)" }}>{currentLine + 1}</span>
@@ -3182,17 +3243,18 @@ export default function RecordingRoom() {
 
       {/* Director Approval Popup */}
       {isDirector && pendingApprovalTake && !approvalStatus && (
-          <div className="fixed bottom-4 left-4 z-50 w-72 rounded-xl p-4" style={{ background: "var(--room-modal-bg)", border: "1px solid hsl(var(--border))", boxShadow: "var(--room-modal-shadow)" }}>
-            <div className="flex items-start justify-between mb-2">
+          <div className="fixed bottom-4 left-4 z-50 rounded-xl p-4" style={{ width: 420, background: "var(--room-modal-bg)", border: "1px solid hsl(var(--border))", boxShadow: "var(--room-modal-shadow)" }}>
+            <div className="flex items-start justify-between mb-3">
               <div>
                 <p className="text-sm font-semibold" style={{ color: "hsl(var(--foreground))" }}>Revisar Take</p>
                 <p className="text-xs mt-0.5" style={{ color: "hsl(var(--muted-foreground))" }}>
-                  {pendingApprovalTake.voiceActorName} - {pendingApprovalTake.characterName} - Linha {pendingApprovalTake.lineIndex + 1}
+                  {pendingApprovalTake.voiceActorName} — {pendingApprovalTake.characterName} — Linha {pendingApprovalTake.lineIndex + 1}
                 </p>
               </div>
               <button
                 onClick={() => {
                   setPendingApprovalTake(null);
+                  setApprovalOffset(0);
                   if (approvalAudioRef.current) { approvalAudioRef.current.pause(); approvalAudioRef.current = null; }
                   if (videoRef.current) { videoRef.current.volume = 1; }
                 }}
@@ -3202,6 +3264,29 @@ export default function RecordingRoom() {
                 <X className="w-3.5 h-3.5" />
               </button>
             </div>
+
+            {/* Waveform editor */}
+            <div className="mb-3" style={{ borderBottom: "1px solid hsl(var(--border) / 0.5)", paddingBottom: 12 }}>
+              <TakeWaveformEditor
+                key={pendingApprovalTake.audioUrl}
+                audioUrl={pendingApprovalTake.audioUrl}
+                durationSeconds={pendingApprovalTake.durationSeconds}
+                onTrim={handleApprovalTrim}
+              />
+            </div>
+
+            {/* Timeline positioner */}
+            {videoDuration > 0 && (
+              <div className="mb-3" style={{ borderBottom: "1px solid hsl(var(--border) / 0.5)", paddingBottom: 12 }}>
+                <AudioTimelinePositioner
+                  key={pendingApprovalTake.durationSeconds}
+                  videoDuration={videoDuration}
+                  audioDuration={pendingApprovalTake.durationSeconds}
+                  startTimeSeconds={approvalOffset}
+                  onChange={setApprovalOffset}
+                />
+              </div>
+            )}
             
             <div className="space-y-2">
               <Button 
@@ -3210,7 +3295,7 @@ export default function RecordingRoom() {
                 size="sm"
               >
                 <Play className="w-3 h-3 mr-1.5" />
-                Play Preview (Sincronizado)
+                Play Preview (offset ajustado)
               </Button>
               
               <Textarea

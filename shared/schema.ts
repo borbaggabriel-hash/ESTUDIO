@@ -182,6 +182,9 @@ export const takes = pgTable("takes", {
   takeNumber: integer("take_number").notNull().default(1),
   isFinal: boolean("is_final").default(false),
   
+  // Timecode / offset
+  startTimeSeconds: real("start_time_seconds").default(0),
+
   // Existing fields
   isPreferred: boolean("is_preferred").default(false),
   qualityScore: real("quality_score"),
