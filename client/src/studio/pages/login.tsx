@@ -156,7 +156,7 @@ export default function Login() {
         email: safeEmail, 
         password: regPassword, 
         fullName: safeName,
-        studioId: regStudioId || undefined
+        ...(regStudioId ? { studioId: regStudioId } : {}),
       },
       {
         onSuccess: () => {

@@ -18,6 +18,7 @@ import { useToast } from "@studio/hooks/use-toast";
 import { useStudioRole } from "@studio/hooks/use-studio-role";
 
 const STUDIO_ROLES = [
+  { value: "studio_admin", label: pt.roles.studio_admin },
   { value: "diretor", label: pt.roles.diretor },
   { value: "dublador", label: pt.roles.dublador },
 ];

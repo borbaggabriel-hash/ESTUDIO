@@ -49,5 +49,5 @@ export const DAILY_PANEL_COLLAPSED_HEIGHT = 70;
 export const DAILY_PANEL_MIN_EXPANDED_HEIGHT = 400;
 
 // Director roles for permission checks
-export const DIRECTOR_ROLES = ["diretor", "director"] as const;
-export const PRIVILEGED_PLATFORM_ROLES = ["platform_owner", "diretor"] as const;
+export const DIRECTOR_ROLES = ["diretor", "director", "studio_admin"] as const;
+export const PRIVILEGED_PLATFORM_ROLES = ["platform_owner", "studio_admin", "diretor"] as const;

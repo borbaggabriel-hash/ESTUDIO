@@ -26,6 +26,10 @@ export function AudioTimelinePositioner({
   const railRef = useRef<HTMLDivElement>(null);
   const isDraggingRef = useRef(false);
   const lastClientXRef = useRef(0);
+  // Snapshot values captured at pointerdown — avoid dep-array churn during drag
+  const dragStartSecondsRef = useRef(0);
+  const dragMaxOffsetRef = useRef(0);
+  const dragWindowDurationRef = useRef(0);
 
   const [isDragging, setIsDragging] = useState(false);
 
@@ -56,12 +60,16 @@ export function AudioTimelinePositioner({
       e.preventDefault();
       (e.currentTarget as HTMLElement).setPointerCapture(e.pointerId);
       lastClientXRef.current = e.clientX;
+      // Snapshot current geometry so handlePointerMove needs no changing deps
+      dragStartSecondsRef.current = startTimeSeconds;
+      dragMaxOffsetRef.current = maxOffset;
+      dragWindowDurationRef.current = windowDuration;
       isDraggingRef.current = true;
       setIsDragging(true);
       document.documentElement.style.cursor = "ew-resize";
       document.documentElement.style.userSelect = "none";
     },
-    [],
+    [startTimeSeconds, maxOffset, windowDuration],
   );
 
   const handlePointerMove = useCallback(
@@ -71,10 +79,12 @@ export function AudioTimelinePositioner({
       if (!rail) return;
       const deltaX = e.clientX - lastClientXRef.current;
       lastClientXRef.current = e.clientX;
-      const deltaSeconds = (deltaX / rail.getBoundingClientRect().width) * windowDuration;
-      onChange(Math.max(0, Math.min(maxOffset, startTimeSeconds + deltaSeconds)));
+      // Use snapshotted refs — stable during the whole drag gesture
+      const deltaSeconds = (deltaX / rail.getBoundingClientRect().width) * dragWindowDurationRef.current;
+      dragStartSecondsRef.current = Math.max(0, Math.min(dragMaxOffsetRef.current, dragStartSecondsRef.current + deltaSeconds));
+      onChange(dragStartSecondsRef.current);
     },
-    [windowDuration, startTimeSeconds, maxOffset, onChange],
+    [onChange],
   );
 
   const handlePointerUp = useCallback(() => {

@@ -59,8 +59,9 @@ export function useUserRole({
 
   const isDirector = useMemo(() => {
     if (user?.role === "platform_owner") return true;
+    if (user?.role === "studio_admin") return true;
     if (user?.role === "diretor") return true;
-    return sessionRole === "diretor";
+    return sessionRole === "diretor" || sessionRole === "studio_admin";
   }, [sessionRole, user?.role]);
 
   const canControl = useMemo(() => {

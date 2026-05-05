@@ -1,5 +1,6 @@
 import { useParams, Link } from "wouter";
 import { useState, useEffect, useRef, useCallback, useMemo } from "react";
+import { createPortal } from "react-dom";
 import { authFetch } from "@studio/lib/auth-fetch";
 import { useQuery, useQueryClient, useMutation } from "@tanstack/react-query";
 import {
@@ -26,6 +27,9 @@ import {
   Edit3,
   Download,
   Navigation,
+  Maximize2,
+  Minimize2,
+  GripHorizontal,
 } from "lucide-react";
 import { useToast } from "@studio/hooks/use-toast";
 import { useAuth } from "@studio/hooks/use-auth";
@@ -42,6 +46,7 @@ import {
   releaseMicrophone,
   setGain,
   getAnalyserData,
+  getTimeDomainData,
   type MicrophoneState,
   type VoiceCaptureMode,
 } from "@studio/lib/audio/microphoneManager";
@@ -59,8 +64,125 @@ import {
 } from "@studio/lib/audio/recordingEngine";
 import { encodeWav, wavToBlob, getDurationSeconds } from "@studio/lib/audio/wavEncoder";
 import { analyzeTakeQuality, type QualityMetrics } from "@studio/lib/audio/qualityAnalysis";
-import { DailyMeetPanel, CountdownOverlay, DeviceSettingsPanel, type DeviceSettings } from "@studio/components/room";
+import { DailyMeetPanel, CountdownOverlay, DeviceSettingsPanel, type DeviceSettings, DawTimeline, type ApprovedTake } from "@studio/components/room";
+import { DirectorControlPip } from "@studio/components/room/DirectorControlPip";
 import { useUserRole } from "@studio/hooks/useUserRole";
+
+// ── Floating PiP Panel ───────────────────────────────────────────────────────
+interface FloatingPanelProps {
+  title: string;
+  onClose: () => void;
+  initialWidth?: number;
+  initialHeight?: number;
+  children: React.ReactNode;
+}
+
+function FloatingPanel({ title, onClose, initialWidth = 480, initialHeight = 320, children }: FloatingPanelProps) {
+  const panelRef = useRef<HTMLDivElement>(null);
+  const posRef = useRef({ x: Math.max(20, (window.innerWidth - initialWidth) / 2), y: Math.max(20, (window.innerHeight - initialHeight) / 2) });
+  const sizeRef = useRef({ w: initialWidth, h: initialHeight });
+  const dragRef = useRef<{ startX: number; startY: number; origX: number; origY: number } | null>(null);
+  const resizeRef = useRef<{ startX: number; startY: number; origW: number; origH: number } | null>(null);
+
+  // Apply position/size to DOM directly (no re-render on every mousemove)
+  const applyTransform = useCallback(() => {
+    if (!panelRef.current) return;
+    panelRef.current.style.left = `${posRef.current.x}px`;
+    panelRef.current.style.top = `${posRef.current.y}px`;
+    panelRef.current.style.width = `${sizeRef.current.w}px`;
+    panelRef.current.style.height = `${sizeRef.current.h}px`;
+  }, []);
+
+  useEffect(() => { applyTransform(); }, [applyTransform]);
+
+  const onDragDown = useCallback((e: React.PointerEvent) => {
+    e.currentTarget.setPointerCapture(e.pointerId);
+    dragRef.current = { startX: e.clientX, startY: e.clientY, origX: posRef.current.x, origY: posRef.current.y };
+  }, []);
+
+  const onDragMove = useCallback((e: React.PointerEvent) => {
+    if (!dragRef.current) return;
+    posRef.current = {
+      x: Math.max(0, dragRef.current.origX + e.clientX - dragRef.current.startX),
+      y: Math.max(0, dragRef.current.origY + e.clientY - dragRef.current.startY),
+    };
+    applyTransform();
+  }, [applyTransform]);
+
+  const onDragUp = useCallback(() => { dragRef.current = null; }, []);
+
+  const onResizeDown = useCallback((e: React.PointerEvent) => {
+    e.stopPropagation();
+    e.currentTarget.setPointerCapture(e.pointerId);
+    resizeRef.current = { startX: e.clientX, startY: e.clientY, origW: sizeRef.current.w, origH: sizeRef.current.h };
+  }, []);
+
+  const onResizeMove = useCallback((e: React.PointerEvent) => {
+    if (!resizeRef.current) return;
+    sizeRef.current = {
+      w: Math.max(260, resizeRef.current.origW + e.clientX - resizeRef.current.startX),
+      h: Math.max(160, resizeRef.current.origH + e.clientY - resizeRef.current.startY),
+    };
+    applyTransform();
+  }, [applyTransform]);
+
+  const onResizeUp = useCallback(() => { resizeRef.current = null; }, []);
+
+  return createPortal(
+    <div
+      ref={panelRef}
+      style={{
+        position: "fixed",
+        zIndex: 9998,
+        borderRadius: 14,
+        overflow: "hidden",
+        boxShadow: "0 8px 40px rgba(0,0,0,0.55), 0 0 0 1px rgba(255,255,255,0.07)",
+        background: "hsl(var(--card))",
+        display: "flex",
+        flexDirection: "column",
+        minWidth: 260,
+        minHeight: 160,
+      }}
+    >
+      {/* Drag handle */}
+      <div
+        style={{ height: 36, background: "hsl(var(--muted))", cursor: "grab", display: "flex", alignItems: "center", justifyContent: "space-between", paddingLeft: 12, paddingRight: 8, userSelect: "none", borderBottom: "1px solid hsl(var(--border))", flexShrink: 0 }}
+        onPointerDown={onDragDown}
+        onPointerMove={onDragMove}
+        onPointerUp={onDragUp}
+      >
+        <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+          <GripHorizontal style={{ width: 14, height: 14, color: "hsl(var(--muted-foreground) / 0.5)" }} />
+          <span style={{ fontSize: 11, fontWeight: 600, letterSpacing: "0.05em", textTransform: "uppercase", color: "hsl(var(--muted-foreground) / 0.7)" }}>{title}</span>
+        </div>
+        <button
+          onPointerDown={(e) => e.stopPropagation()}
+          onClick={onClose}
+          style={{ width: 22, height: 22, borderRadius: 6, display: "flex", alignItems: "center", justifyContent: "center", background: "hsl(var(--muted-foreground) / 0.15)", border: "none", cursor: "pointer", color: "hsl(var(--muted-foreground))" }}
+        >
+          <Minimize2 style={{ width: 11, height: 11 }} />
+        </button>
+      </div>
+      {/* Content */}
+      <div style={{ flex: 1, overflow: "hidden", position: "relative" }}>
+        {children}
+      </div>
+      {/* Resize handle */}
+      <div
+        style={{ position: "absolute", bottom: 0, right: 0, width: 18, height: 18, cursor: "nwse-resize", zIndex: 1 }}
+        onPointerDown={onResizeDown}
+        onPointerMove={onResizeMove}
+        onPointerUp={onResizeUp}
+      >
+        <svg width="12" height="12" viewBox="0 0 12 12" style={{ position: "absolute", bottom: 3, right: 3, opacity: 0.4 }}>
+          <path d="M11 1 1 11M11 5 5 11M11 9 9 11" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round"/>
+        </svg>
+      </div>
+    </div>,
+    document.body
+  );
+}
+// ─────────────────────────────────────────────────────────────────────────────
 
 interface ScriptLine {
   character: string;
@@ -364,6 +486,14 @@ export default function RecordingRoom() {
     } catch { return 0.625; }
   });
 
+  const [dawTimelineH, setDawTimelineH] = useState<number>(() => {
+    try {
+      const v = Number(localStorage.getItem("vhub_daw_h"));
+      return isNaN(v) || v === 0 ? 220 : Math.min(600, Math.max(112, v));
+    } catch { return 220; }
+  });
+  const dawTimelineHRef = useRef(220);
+
   const [shortcuts, setShortcuts] = useState<Shortcuts>(() => {
     try {
       const saved = localStorage.getItem("vhub_shortcuts");
@@ -376,6 +506,8 @@ export default function RecordingRoom() {
   const [isCustomizing, setIsCustomizing] = useState(false);
   const [listeningFor, setListeningFor] = useState<keyof Shortcuts | null>(null);
   const [deviceSettingsOpen, setDeviceSettingsOpen] = useState(false);
+  const [videoFloating, setVideoFloating] = useState(false);
+  const [scriptFloating, setScriptFloating] = useState(false);
   const [deviceSettings, setDeviceSettings] = useState<DeviceSettings>(() => {
     const defaults: DeviceSettings = { inputDeviceId: "", outputDeviceId: "", inputGain: 1, monitorVolume: 0.8, voiceCaptureMode: "original" };
     try {
@@ -640,6 +772,7 @@ export default function RecordingRoom() {
   const [approvalOffset, setApprovalOffset] = useState<number>(0);
   const approvalAudioRef = useRef<HTMLAudioElement | null>(null);
   const approvalPreviewCleanupRef = useRef<(() => void) | null>(null);
+  const approvalBlobRef = useRef<Blob | null>(null);
 
   const videoRef = useRef<HTMLVideoElement>(null);
   const recordingStartTimecodeRef = useRef(0);
@@ -653,7 +786,8 @@ export default function RecordingRoom() {
   const scriptProgrammaticScrollRef = useRef(false);
   const scriptUserScrollIntentRef = useRef(false);
   const scriptUserScrollIntentTimerRef = useRef<number | null>(null);
-  const telepromptRafRef = useRef<number | null>(null);
+  const telepromptRafRef    = useRef<number | null>(null);
+  const videoTimeRafRef     = useRef<number | null>(null);
   const telepromptLastTsRef = useRef<number | null>(null);
   const telepromptScriptRef = useRef<ScriptLine[]>([]);
   const telepromptVideoTimeRef = useRef(0);
@@ -721,7 +855,29 @@ export default function RecordingRoom() {
   const [takePreviewId, setTakePreviewId] = useState<string | null>(null);
   const takePreviewAudioRef = useRef<HTMLAudioElement | null>(null);
   const [takeCacheBust, setTakeCacheBust] = useState<Record<string, number>>({});
+  const [optimisticTrimDurations, setOptimisticTrimDurations] = useState<Record<string, number>>({});
   const [takePreviewProgress, setTakePreviewProgress] = useState(0);
+
+  // ── Mobile layout ────────────────────────────────────────────────────────
+  const [isMobile, setIsMobile] = useState(() => typeof window !== 'undefined' && window.innerWidth < 640);
+  const [mobileVideoH, setMobileVideoH] = useState<number>(() => {
+    try { const s = localStorage.getItem('daw-mobile-video-height'); return s ? Number(s) : 20; } catch { return 20; }
+  });
+  const mobileDragRef = useRef<{ startY: number; startH: number } | null>(null);
+
+  type RemoteRecordingState = {
+    startTimeSeconds: number;
+    peaks: { min: number; max: number }[];
+    voiceActorId?: string;
+    voiceActorName?: string;
+    characterName?: string;
+  };
+  const [remoteRecording, setRemoteRecording] = useState<RemoteRecordingState | null>(null);
+  const remoteRecordingRef = useRef<RemoteRecordingState | null>(null);
+
+  // Acumulador de perfis de dubladores conhecidos (cresce, nunca encolhe)
+  const [knownVoiceActors, setKnownVoiceActors] = useState<Map<string, { voiceActorId: string; voiceActorName: string; characterName: string }>>(() => new Map());
+  const [optimisticApproved, setOptimisticApproved] = useState<ApprovedTake[]>([]);
 
 
   // Unified role checks via hook
@@ -778,6 +934,22 @@ export default function RecordingRoom() {
     },
     [],
   );
+
+  const handleToggleTextControl = useCallback((userId: string) => {
+    setTextControllerUserIds((prev) => {
+      const next = new Set(prev);
+      if (next.has(userId)) next.delete(userId);
+      else next.add(userId);
+      emitTextControlEvent("text-control:set-controllers", { targetUserIds: Array.from(next) });
+      return next;
+    });
+    setPendingTextControllerUserIds((prev) => {
+      const next = new Set(prev);
+      if (next.has(userId)) next.delete(userId);
+      else next.add(userId);
+      return next;
+    });
+  }, [emitTextControlEvent]);
 
   useEffect(() => {
     (async () => {
@@ -921,6 +1093,42 @@ export default function RecordingRoom() {
             if (typeof msg.startedByUserId !== "string" || !msg.startedByUserId) return;
             setPrerollTargetTime(msg.targetTime);
             setPrerollInitiatorUserId(msg.startedByUserId);
+            return;
+          }
+          if (msg.type === "recording:start" && (msg as any).userId !== user?.id) {
+            const actorId   = (msg as any).userId ?? "";
+            const actorName = msg.voiceActorName ?? "";
+            const charName  = msg.characterName  ?? "";
+            const obj: RemoteRecordingState = {
+              startTimeSeconds: (msg as any).startTimeSeconds ?? 0,
+              peaks: [],
+              voiceActorId:   actorId,
+              voiceActorName: actorName,
+              characterName:  charName,
+            };
+            remoteRecordingRef.current = obj;
+            setRemoteRecording(obj);
+            // Adiciona/atualiza acumulador de perfis — sempre atualiza characterName se vier preenchido
+            if (actorName) {
+              setKnownVoiceActors(prev => {
+                const key     = `${actorId || "anon"}__${actorName}`;
+                const current = prev.get(key);
+                // Só cria/atualiza se tiver novo dado (characterName novo ou entrada ainda não existia)
+                if (current && current.characterName === charName) return prev;
+                const next = new Map(prev);
+                next.set(key, { voiceActorId: actorId, voiceActorName: actorName, characterName: charName });
+                return next;
+              });
+            }
+            return;
+          }
+          if (msg.type === "recording:peak" && remoteRecordingRef.current && (msg as any).userId !== user?.id) {
+            remoteRecordingRef.current.peaks.push((msg as any).peak ?? { min: 0, max: 0 });
+            return;
+          }
+          if (msg.type === "recording:stop" && (msg as any).userId !== user?.id) {
+            remoteRecordingRef.current = null;
+            setRemoteRecording(null);
             return;
           }
           if (msg.type === "text-control:update-line") {
@@ -1136,6 +1344,25 @@ export default function RecordingRoom() {
     localStorage.setItem("vhub_device_settings", JSON.stringify(deviceSettings));
   }, [deviceSettings]);
 
+  // Apply monitorVolume to video element in real-time
+  useEffect(() => {
+    const video = videoRef.current;
+    if (!video) return;
+    video.volume = deviceSettings.monitorVolume;
+  }, [deviceSettings.monitorVolume]);
+
+  // Route video audio output to selected speaker device (setSinkId)
+  useEffect(() => {
+    const video = videoRef.current;
+    if (!video || !deviceSettings.outputDeviceId) return;
+    // @ts-ignore — setSinkId is not in all TS lib defs but is widely supported
+    if (typeof video.setSinkId === "function") {
+      video.setSinkId(deviceSettings.outputDeviceId).catch((err: any) => {
+        console.warn("[DeviceSettings] setSinkId failed:", err?.message);
+      });
+    }
+  }, [deviceSettings.outputDeviceId]);
+
   useEffect(() => {
     try {
       localStorage.setItem(`vhub_control_perm_${sessionId}`, JSON.stringify(Array.from(controlPermissions)));
@@ -1194,6 +1421,13 @@ export default function RecordingRoom() {
     localStorage.setItem(`vhub_rec_profile_${sessionId}`, JSON.stringify(profile));
     setShowProfilePanel(false);
     toast({ title: "Perfil de gravacao definido", description: `${profile.voiceActorName} como ${profile.characterName}` });
+    // Registra/atualiza este dublador na timeline quando define o perfil (sempre atualiza characterName)
+    setKnownVoiceActors(prev => {
+      const key  = `${profile.userId || "anon"}__${profile.voiceActorName}`;
+      const next = new Map(prev);
+      next.set(key, { voiceActorId: profile.userId, voiceActorName: profile.voiceActorName, characterName: profile.characterName });
+      return next;
+    });
   }, [sessionId, toast]);
 
   const handleChangeCharacter = useCallback((charId: string) => {
@@ -1218,7 +1452,14 @@ export default function RecordingRoom() {
 
     const handleTimeUpdate = () => {
       const t = video.currentTime;
-      setVideoTime(t);
+
+      // Throttle React state update to one per animation frame (reduces re-renders)
+      if (videoTimeRafRef.current === null) {
+        videoTimeRafRef.current = requestAnimationFrame(() => {
+          setVideoTime(videoRef.current?.currentTime ?? t);
+          videoTimeRafRef.current = null;
+        });
+      }
 
       const idx = scriptLines.findIndex(
         (line) => t >= line.start && t < (line.end ?? line.start + 1)
@@ -1295,6 +1536,40 @@ export default function RecordingRoom() {
   }, []);
 
   useEffect(() => { splitRatioRef.current = splitRatio; }, [splitRatio]);
+  useEffect(() => { dawTimelineHRef.current = dawTimelineH; }, [dawTimelineH]);
+
+  // ── Mobile: watch resize + orientation ────────────────────────────────────
+  useEffect(() => {
+    const check = () => setIsMobile(window.innerWidth < 640);
+    window.addEventListener('resize', check);
+    return () => window.removeEventListener('resize', check);
+  }, []);
+  useEffect(() => {
+    const onOrient = () => {
+      setMobileVideoH(20);
+      try { localStorage.removeItem('daw-mobile-video-height'); } catch {}
+    };
+    window.addEventListener('orientationchange', onOrient);
+    return () => window.removeEventListener('orientationchange', onOrient);
+  }, []);
+
+  const handleMobileDividerDown = useCallback((e: React.PointerEvent) => {
+    e.currentTarget.setPointerCapture(e.pointerId);
+    mobileDragRef.current = { startY: e.clientY, startH: mobileVideoH };
+  }, [mobileVideoH]);
+
+  const handleMobileDividerMove = useCallback((e: React.PointerEvent) => {
+    if (!mobileDragRef.current) return;
+    const dy = e.clientY - mobileDragRef.current.startY;
+    const deltaPercent = (dy / window.innerHeight) * 100;
+    const next = Math.min(40, Math.max(10, mobileDragRef.current.startH + deltaPercent));
+    setMobileVideoH(next);
+    try { localStorage.setItem('daw-mobile-video-height', String(Math.round(next))); } catch {}
+  }, []);
+
+  const handleMobileDividerUp = useCallback(() => {
+    mobileDragRef.current = null;
+  }, []);
 
   const handleDividerPointerDown = useCallback((e: React.PointerEvent<HTMLDivElement>) => {
     e.preventDefault();
@@ -1324,6 +1599,30 @@ export default function RecordingRoom() {
 
     document.addEventListener("pointermove", onPointerMove);
     document.addEventListener("pointerup", onPointerUp);
+  }, []);
+
+  const handleDawResizePointerDown = useCallback((e: React.PointerEvent<HTMLDivElement>) => {
+    e.preventDefault();
+    (e.currentTarget as HTMLElement).setPointerCapture(e.pointerId);
+    document.documentElement.style.cursor = "row-resize";
+    document.documentElement.style.userSelect = "none";
+    const startY = e.clientY;
+    const startH = dawTimelineHRef.current;
+    const onMove = (ev: PointerEvent) => {
+      const delta = startY - ev.clientY; // drag up → bigger
+      const newH = Math.min(600, Math.max(112, startH + delta));
+      dawTimelineHRef.current = newH;
+      setDawTimelineH(newH);
+    };
+    const onUp = () => {
+      document.documentElement.style.cursor = "";
+      document.documentElement.style.userSelect = "";
+      localStorage.setItem("vhub_daw_h", String(dawTimelineHRef.current));
+      document.removeEventListener("pointermove", onMove);
+      document.removeEventListener("pointerup", onUp);
+    };
+    document.addEventListener("pointermove", onMove);
+    document.addEventListener("pointerup", onUp);
   }, []);
 
   const scrollScriptToLine = useCallback((idx: number, behavior: ScrollBehavior) => {
@@ -1474,6 +1773,39 @@ export default function RecordingRoom() {
     }
   }, []);
 
+  const handleRevokeAllTextControl = useCallback(() => {
+    emitVideoEvent("revoke-all", {});
+    emitTextControlEvent("text-control:set-controllers", { targetUserIds: [] });
+    setControlPermissions(new Set());
+    setGlobalControlEnabled(false);
+    setTextControllerUserIds(new Set());
+    setPendingTextControllerUserIds(new Set());
+  }, [emitVideoEvent, emitTextControlEvent]);
+
+  // ── Emit live recording peaks via WS → directors see remote waveform ──────
+  useEffect(() => {
+    if (recordingStatus !== "recording" || !micState) return;
+    emitVideoEvent("recording:start", {
+      startTimeSeconds: recordingStartTimecodeRef.current,
+      voiceActorName: recordingProfile?.voiceActorName ?? "",
+      characterName:  recordingProfile?.characterName  ?? "",
+    });
+    const interval = setInterval(() => {
+      const data = getTimeDomainData(micState);
+      let mn = 0, mx = 0;
+      for (let i = 0; i < data.length; i++) {
+        const v = (data[i] - 128) / 128;
+        if (v < mn) mn = v;
+        if (v > mx) mx = v;
+      }
+      emitVideoEvent("recording:peak", { peak: { min: mn, max: mx } });
+    }, 150);
+    return () => {
+      clearInterval(interval);
+      emitVideoEvent("recording:stop", {});
+    };
+  }, [recordingStatus, micState, emitVideoEvent, recordingStartTimecodeRef]);
+
   const playVideo = useCallback(() => {
     if (!videoRef.current) return;
     setScriptAutoFollow(true);
@@ -1534,6 +1866,12 @@ export default function RecordingRoom() {
     videoRef.current.currentTime = t;
     emitVideoEvent("video-seek", { currentTime: t });
   }, [videoDuration, emitVideoEvent, canControl]);
+
+  const seekToTime = useCallback((t: number) => {
+    if (!videoRef.current) return;
+    videoRef.current.currentTime = t;
+    emitVideoEvent("video-seek", { currentTime: t });
+  }, [emitVideoEvent]);
 
   const handleLineClick = useCallback((idx: number) => {
     if (!canTextControl) return;
@@ -1673,6 +2011,7 @@ export default function RecordingRoom() {
     const durationSeconds = getDurationSeconds(result.samples);
     const tc = Math.max(0, recordingStartTimecodeRef.current);
     const blobUrl = createPreviewUrl(blob);
+    approvalBlobRef.current = blob; // stored for TakeWaveformEditor — avoids CORS fetch
 
     // ➋ Show approval popup immediately with local blob URL (takeId '' while uploading)
     setPendingApprovalTake({
@@ -1760,11 +2099,14 @@ export default function RecordingRoom() {
 
       const savedTake = await response.json();
 
-      // Update popup with real takeId and server URL — enables approve/reject buttons
+      // Update popup with real takeId — switch to stream URL (local proxy, avoids CORS)
+      // Clear blob ref so waveform editor fetches from stream on remount
+      approvalBlobRef.current = null;
+      const streamUrl = `/api/takes/${savedTake.id}/stream?d=${durationSeconds}`;
       setPendingApprovalTake(prev => prev ? {
         ...prev,
         takeId: savedTake.id,
-        audioUrl: savedTake.audioUrl || prev.audioUrl,
+        audioUrl: streamUrl,
       } : null);
 
       // Emit WebSocket for other directors in the room
@@ -1949,6 +2291,97 @@ export default function RecordingRoom() {
     toast({ title: "Take descartado" });
   }, [cleanupPreview, toast]);
 
+  // All approved takes for voice actors with text permission (DawTimeline)
+  const approvedTakes = useMemo((): ApprovedTake[] => {
+    const fromDB = (takesList as any[])
+      .filter(t => {
+        if (t.status !== "approved") return false;
+        if (textControllerUserIds.size === 0) return true;
+        return textControllerUserIds.has(t.voiceActorId);
+      })
+      .map(t => ({
+        id: t.id,
+        audioUrl: t.audioUrl ?? "",
+        startTimeSeconds: t.startTimeSeconds ?? 0,
+        durationSeconds: optimisticTrimDurations[t.id] ?? t.durationSeconds ?? 0,
+        voiceActorName: t.voiceActorName ?? "",
+        voiceActorId: t.voiceActorId ?? "",
+        lineIndex: t.lineIndex ?? 0,
+        characterName: t.characterName ?? "",
+      }));
+    const dbIds = new Set(fromDB.map((t: ApprovedTake) => t.id));
+    const extraFromOptimistic = optimisticApproved
+      .filter(t => !dbIds.has(t.id))
+      .map(t => ({ ...t, durationSeconds: optimisticTrimDurations[t.id] ?? t.durationSeconds }));
+    return [...fromDB, ...extraFromOptimistic];
+  }, [takesList, textControllerUserIds, optimisticApproved, optimisticTrimDurations]);
+
+  // Perfis de dubladores conhecidos: acumulados via WS + aprovados em DB
+  const voiceActorProfiles = useMemo(() => {
+    const map = new Map(knownVoiceActors);
+
+    // Chave composta: accountId + "__" + profileName garante que contas distintas com
+    // o mesmo nome de perfil sempre geram tracks separados.
+    const compoundKey = (id: string | undefined | null, name: string) =>
+      `${id || "anon"}__${name}`;
+
+    // Inclui o dublador gravando localmente: cria a track dele imediatamente
+    // ao configurar o perfil, independente de ter take aprovado ou estar na presença.
+    if (recordingProfile?.voiceActorName && user?.id) {
+      const localKey = compoundKey(user.id, recordingProfile.voiceActorName);
+      if (!map.has(localKey)) {
+        map.set(localKey, {
+          voiceActorId:   user.id,
+          voiceActorName: recordingProfile.voiceActorName,
+          characterName:  recordingProfile.characterName || "",
+        });
+      }
+    }
+
+    // Inclui participantes online (presença) que NÃO sejam diretores/admins —
+    // cria track imediatamente quando o dublador entra na sala
+    const DIRECTOR_ROLES = new Set(["platform_owner", "diretor", "director", "admin", "owner"]);
+    for (const p of presenceUsers) {
+      if (!p.name) continue;
+      if (p.role && DIRECTOR_ROLES.has(p.role)) continue; // pula diretores/admins
+      const key = compoundKey(p.userId, p.name);
+      if (map.has(key)) continue;
+      map.set(key, { voiceActorId: p.userId || "", voiceActorName: p.name, characterName: "" });
+    }
+
+    // Complementa com dados dos takes aprovados (fonte mais confiável de ID)
+    for (const t of approvedTakes) {
+      if (!t.voiceActorName) continue;
+      const key = compoundKey(t.voiceActorId, t.voiceActorName);
+      if (map.has(key)) continue;
+      map.set(key, { voiceActorId: t.voiceActorId || t.voiceActorName, voiceActorName: t.voiceActorName, characterName: t.characterName ?? "" });
+    }
+    // Inclui o take pendente de aprovação
+    if (pendingApprovalTake) {
+      const name = pendingApprovalTake.voiceActorName;
+      const key  = compoundKey(pendingApprovalTake.voiceActorId, name);
+      if (!map.has(key)) {
+        map.set(key, { voiceActorId: pendingApprovalTake.voiceActorId, voiceActorName: name, characterName: pendingApprovalTake.characterName });
+      }
+    }
+    const all = Array.from(map.values());
+    // Mirror the same guard used by approvedTakes: when no permissions are set show
+    // everyone; when permissions are granted only show authorised actors' tracks.
+    // The pending-take actor (mid-recording) always bypasses the filter.
+    if (textControllerUserIds.size === 0) return all;
+    const pendingId  = pendingApprovalTake?.voiceActorId ?? "";
+    const localActorId = (recordingProfile?.voiceActorName && user?.id) ? user.id : "";
+    return all.filter(a =>
+      textControllerUserIds.has(a.voiceActorId) ||
+      (pendingId    && a.voiceActorId === pendingId) ||
+      (localActorId && a.voiceActorId === localActorId)
+    );
+  }, [knownVoiceActors, presenceUsers, approvedTakes, pendingApprovalTake, textControllerUserIds, recordingProfile, user?.id]);
+
+  const handleSamplesEdited = useCallback((samples: Float32Array) => {
+    setLastRecording((prev) => prev ? { ...prev, samples } : null);
+  }, []);
+
   const handleApprovalTrim = useCallback(async (startSec: number, endSec: number) => {
     if (!pendingApprovalTake?.takeId) return;
     try {
@@ -1966,6 +2399,95 @@ export default function RecordingRoom() {
       toast({ title: "Erro ao cortar take", description: err.message, variant: "destructive" });
     }
   }, [pendingApprovalTake, videoDuration, toast]);
+
+  const handleTakeTrim = useCallback(async (takeId: string, startSec: number, endSec: number) => {
+    const newDur = endSec - startSec;
+    // Optimistic: clip encolhe imediatamente (antes da API retornar)
+    setOptimisticTrimDurations(prev => ({ ...prev, [takeId]: newDur }));
+    try {
+      const data = await authFetch(`/api/takes/${takeId}/trim`, {
+        method: "POST",
+        body: JSON.stringify({ startSeconds: startSec, endSeconds: endSec }),
+      });
+      // Persiste duração e audioUrl no optimisticApproved imediatamente após o corte.
+      // Isso evita o revert: quando optimisticTrimDurations for limpo, o extraFromOptimistic
+      // ainda lerá os valores corretos de optimisticApproved em vez dos originais.
+      setOptimisticApproved(prev => prev.map(t =>
+        t.id === takeId
+          ? { ...t, durationSeconds: newDur, audioUrl: data?.audioUrl ?? t.audioUrl }
+          : t
+      ));
+      setTakeCacheBust(prev => ({ ...prev, [takeId]: Date.now() }));
+      // Await refetch so server data is ready before clearing optimistic override
+      await refetchTakes();
+      setOptimisticTrimDurations(prev => { const n = { ...prev }; delete n[takeId]; return n; });
+      toast({ title: "Take ajustado", description: `Mantido ${newDur.toFixed(1)}s` });
+    } catch (err: any) {
+      // Revert optimistic on error
+      setOptimisticTrimDurations(prev => { const n = { ...prev }; delete n[takeId]; return n; });
+      toast({ title: "Erro ao ajustar take", description: err.message, variant: "destructive" });
+    }
+  }, [refetchTakes, toast]);
+
+  const handleTakeSplit = useCallback(async (takeId: string, splitAtSeconds: number) => {
+    try {
+      await authFetch(`/api/takes/${takeId}/split`, {
+        method: "POST",
+        body: JSON.stringify({ splitAtSeconds }),
+      });
+      refetchTakes();
+      toast({ title: "Take dividido", description: `Cortado em ${splitAtSeconds.toFixed(1)}s` });
+    } catch (err: any) {
+      toast({ title: "Erro ao dividir take", description: err.message, variant: "destructive" });
+    }
+  }, [refetchTakes, toast]);
+
+  const handleTakeDelete = useCallback(async (takeId: string) => {
+    try {
+      await authFetch(`/api/takes/${takeId}`, { method: "DELETE" });
+      setOptimisticApproved(prev => prev.filter(t => t.id !== takeId));
+      refetchTakes();
+      toast({ title: "Take excluído" });
+    } catch (err: any) {
+      toast({ title: "Erro ao excluir take", description: err.message, variant: "destructive" });
+    }
+  }, [refetchTakes, toast]);
+
+  const handleTakeSilenceRemove = useCallback(async (
+    takeId: string,
+    regions: Array<{ start: number; end: number; name: string }>,
+  ) => {
+    if (regions.length === 0) {
+      toast({ title: "Nenhum áudio detectado", description: "O take parece completamente silencioso.", variant: "destructive" });
+      return;
+    }
+    const take = (takesList as any[]).find(t => t.id === takeId);
+    const takeStartTime = take?.startTimeSeconds ?? 0;
+    try {
+      const relativeRegions = regions.map(r => ({
+        startSeconds: Math.max(0, r.start - takeStartTime),
+        endSeconds:   r.end - takeStartTime,
+        name:         r.name,
+      }));
+      await authFetch(`/api/takes/${takeId}/silence-remove`, {
+        method: "POST",
+        body: JSON.stringify({ regions: relativeRegions }),
+      });
+      setOptimisticApproved(prev => prev.filter(t => t.id !== takeId));
+      await refetchTakes();
+      toast({ title: "Silêncio removido", description: `${regions.length} segmento(s) criado(s)` });
+    } catch (err: any) {
+      toast({ title: "Erro ao remover silêncio", description: err.message, variant: "destructive" });
+    }
+  }, [takesList, refetchTakes, toast]);
+
+  const handleMuteVideo = useCallback(() => {
+    if (videoRef.current) videoRef.current.volume = 0;
+  }, []);
+
+  const handleUnmuteVideo = useCallback(() => {
+    if (videoRef.current) videoRef.current.volume = deviceSettings.monitorVolume;
+  }, [deviceSettings.monitorVolume]);
 
   const handleDirectorPreview = useCallback(() => {
     const video = videoRef.current;
@@ -1987,47 +2509,49 @@ export default function RecordingRoom() {
     const audio = new Audio(pendingApprovalTake.audioUrl);
     approvalAudioRef.current = audio;
 
-    const endTime = approvalOffset + pendingApprovalTake.durationSeconds;
-    let timeoutId: NodeJS.Timeout | null = null;
+    const dur = pendingApprovalTake.durationSeconds;
+    let endTimeoutId: NodeJS.Timeout | null = null;
     let hasCleanedUp = false;
 
     const cleanup = () => {
       if (hasCleanedUp) return;
       hasCleanedUp = true;
       approvalPreviewCleanupRef.current = null;
-      if (timeoutId) clearTimeout(timeoutId);
-      video.removeEventListener("play", syncPlay);
+      if (endTimeoutId) clearTimeout(endTimeoutId);
       video.removeEventListener("pause", syncPause);
       video.removeEventListener("seeked", syncSeek);
-      video.removeEventListener("timeupdate", checkEnd);
-      video.volume = 1;
+      // Always stop video and restore configured volume
+      video.pause();
+      video.volume = deviceSettings.monitorVolume;
       audio.pause();
     };
 
-    const checkEnd = () => { if (video.currentTime >= endTime) { video.pause(); cleanup(); } };
-    const syncPlay = () => {
-      const offset = video.currentTime - approvalOffset;
-      if (offset >= 0 && offset <= pendingApprovalTake.durationSeconds) { audio.currentTime = offset; audio.play().catch(() => {}); }
-    };
+    // Sync audio pause/seek with video controls
     const syncPause = () => { audio.pause(); };
     const syncSeek = () => {
       const offset = video.currentTime - approvalOffset;
-      if (offset >= 0 && offset <= pendingApprovalTake.durationSeconds) { audio.currentTime = offset; } else { audio.pause(); }
+      if (offset >= 0 && offset < dur) { audio.currentTime = offset; }
+      else { audio.pause(); }
     };
 
-    video.addEventListener("play", syncPlay);
-    video.addEventListener("pause", syncPause);
-    video.addEventListener("seeked", syncSeek);
-    video.addEventListener("timeupdate", checkEnd);
+    // audio.onended is the primary end signal — most reliable
     audio.onended = cleanup;
 
-    timeoutId = setTimeout(() => {
-      if (!hasCleanedUp && video.currentTime >= endTime - 0.1) { video.pause(); cleanup(); }
-    }, pendingApprovalTake.durationSeconds * 1000 + 200);
+    video.addEventListener("pause", syncPause);
+    video.addEventListener("seeked", syncSeek);
 
     approvalPreviewCleanupRef.current = cleanup;
-    video.play().then(() => { audio.play().catch(() => {}); }).catch(() => {});
-  }, [pendingApprovalTake, approvalOffset]);
+
+    video.play()
+      .then(() => audio.play())
+      .then(() => {
+        // Fallback timeout anchored to when audio actually started playing
+        endTimeoutId = setTimeout(() => {
+          if (!hasCleanedUp) cleanup();
+        }, dur * 1000 + 300);
+      })
+      .catch(() => cleanup());
+  }, [pendingApprovalTake, approvalOffset, deviceSettings.monitorVolume]);
 
   const handleTakeDecision = useCallback(async (action: "approve" | "reject", feedback: string) => {
     if (!pendingApprovalTake) return;
@@ -2039,6 +2563,19 @@ export default function RecordingRoom() {
       ? { feedback, setAsFinal: false, startTimeSeconds: approvalOffset }
       : { feedback: feedback || "Sem feedback" };
     const takeId = pendingApprovalTake.takeId;
+
+    // Optimistic: push take to Track 2 immediately before API round-trip
+    if (action === "approve" && pendingApprovalTake.takeId) {
+      setOptimisticApproved(prev => [...prev, {
+        id: pendingApprovalTake.takeId,
+        audioUrl: pendingApprovalTake.audioUrl,
+        startTimeSeconds: approvalOffset,
+        durationSeconds: pendingApprovalTake.durationSeconds,
+        voiceActorName: (pendingApprovalTake as any).voiceActorName ?? "",
+        lineIndex: pendingApprovalTake.lineIndex,
+        characterName: pendingApprovalTake.characterName,
+      }]);
+    }
 
     // Optimistic close — popup fecha imediatamente, API chama em background
     setPendingApprovalTake(null);
@@ -2067,6 +2604,7 @@ export default function RecordingRoom() {
     const handler = (e: KeyboardEvent) => {
       const tag = (e.target as HTMLElement).tagName;
       if (tag === "INPUT" || tag === "TEXTAREA") return;
+      if (!canTextControl) return;
 
       const code = e.code;
       const key = e.key;
@@ -2101,7 +2639,7 @@ export default function RecordingRoom() {
     };
     window.addEventListener("keydown", handler);
     return () => window.removeEventListener("keydown", handler);
-  }, [shortcuts, isCustomizing, recordingStatus, handlePlayPause, handlePreview, startCountdown, handleStopRecording, handleStopPlayback, seek]);
+  }, [shortcuts, isCustomizing, canTextControl, recordingStatus, handlePlayPause, handlePreview, startCountdown, handleStopRecording, handleStopPlayback, seek]);
 
   const currentScriptLine = scriptLines[currentLine];
 
@@ -2159,8 +2697,8 @@ export default function RecordingRoom() {
         </div>
       )}
 
-      {/* Cinematic Background */}
-      <div className="fixed inset-0 z-0 pointer-events-none">
+      {/* Cinematic Background — z-index:-1 garante que nunca pinte sobre o conteúdo */}
+      <div className="fixed inset-0 pointer-events-none" style={{ zIndex: -1 }}>
         <div className="absolute inset-0 bg-[radial-gradient(ellipse_at_center,_var(--tw-gradient-stops))] from-primary/5 via-background to-background opacity-50"></div>
         <div className="absolute inset-0 bg-[url('/grid-pattern.svg')] bg-repeat opacity-[0.02]"></div>
       </div>
@@ -2258,7 +2796,7 @@ export default function RecordingRoom() {
         />
       )}
 
-      {takesPopupOpen && (
+      {false /* → DirectorControlPip */ && (
         <div className="absolute inset-0 z-40 flex items-center justify-center" style={{ background: "rgba(0,0,0,0.35)", backdropFilter: "blur(6px)", WebkitBackdropFilter: "blur(6px)" }}>
           <div className="rounded-2xl w-[calc(100vw-32px)] max-w-[520px] overflow-hidden" style={{ background: "var(--room-modal-bg)", border: "1px solid hsl(var(--border))", boxShadow: "var(--room-modal-shadow)" }}>
             <div className="flex items-center justify-between px-6 py-4" style={{ borderBottom: "1px solid hsl(var(--border))" }}>
@@ -2446,23 +2984,20 @@ export default function RecordingRoom() {
         </div>
       )}
 
-      {textControlPopupOpen && (
-        <div className="absolute inset-0 z-40 flex items-center justify-center" style={{ background: "rgba(0,0,0,0.35)", backdropFilter: "blur(6px)", WebkitBackdropFilter: "blur(6px)" }}>
-          <div className="rounded-2xl w-[calc(100vw-32px)] max-w-[520px] max-h-[85vh] flex flex-col" style={{ background: "var(--room-modal-bg)", border: "1px solid hsl(var(--border))", boxShadow: "var(--room-modal-shadow)" }}>
-            <div className="flex items-center justify-between px-6 py-4 shrink-0" style={{ borderBottom: "1px solid hsl(var(--border))" }}>
-              <span className="text-sm font-semibold" style={{ color: "hsl(var(--foreground))" }}>Controle de Texto</span>
-              <button
-                onClick={() => setTextControlPopupOpen(false)}
-                className="transition-colors"
-                style={{ color: "hsl(var(--muted-foreground) / 0.7)" }}
-                data-testid="button-close-text-control"
-              >
-                <X className="w-4 h-4" />
-              </button>
-            </div>
-            <div className="px-6 py-5 overflow-y-auto" style={{ maxHeight: "calc(85vh - 140px)" }}>
-              <div className="flex items-center justify-between mb-3">
-                <span className="text-[10px] uppercase tracking-wider" style={{ color: "hsl(var(--muted-foreground) / 0.7)" }}>Autorizacao (Alunos / Dubladores)</span>
+      {false /* → DirectorControlPip */ && (
+        <FloatingPanel
+          title="Controle de Texto"
+          onClose={() => setTextControlPopupOpen(false)}
+          initialWidth={440}
+          initialHeight={500}
+        >
+          <div style={{ display: "flex", flexDirection: "column", height: "100%", background: "hsl(var(--card))" }}>
+            {/* ── Subheader: authorized summary + revoke-all ── */}
+            <div style={{ padding: "10px 16px 0", flexShrink: 0 }}>
+              <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 8 }}>
+                <span style={{ fontSize: 9, fontWeight: 700, letterSpacing: "0.12em", textTransform: "uppercase", color: "hsl(var(--muted-foreground) / 0.55)" }}>
+                  Autorizacao (Alunos / Dubladores)
+                </span>
                 <button
                   onClick={() => {
                     const ok = window.confirm("Revogar permissoes temporarias e remover autorizacoes de controle de texto?");
@@ -2475,14 +3010,13 @@ export default function RecordingRoom() {
                     setPendingTextControllerUserIds(new Set());
                     setTextControlPopupOpen(false);
                   }}
-                  className="text-[9px] px-2 py-0.5 rounded bg-red-500/10 text-red-400 hover:bg-red-500/20 transition-colors uppercase font-bold"
+                  style={{ fontSize: 9, padding: "2px 8px", borderRadius: 4, background: "rgba(239,68,68,0.08)", color: "#f87171", border: "1px solid rgba(239,68,68,0.18)", cursor: "pointer", fontWeight: 700, letterSpacing: "0.06em", textTransform: "uppercase" }}
                   data-testid="button-revoke-all-text-control"
                 >
                   Revogar tudo
                 </button>
               </div>
-
-              <div className="text-[11px] mb-3" style={{ color: "hsl(var(--muted-foreground) / 0.9)" }}>
+              <div style={{ fontSize: 11, marginBottom: 10, color: "hsl(var(--muted-foreground) / 0.8)" }}>
                 Autorizados:{" "}
                 <span style={{ color: "hsl(var(--foreground) / 0.85)" }}>
                   {(() => {
@@ -2493,65 +3027,76 @@ export default function RecordingRoom() {
                   })()}
                 </span>
               </div>
-
-              <div className="flex flex-col gap-2 pr-1">
-                {(() => {
-                  // Show ALL connected users - no role filter
-                  if (!presenceRoster.length) {
-                    return (
-                      <div className="text-sm text-center py-10" style={{ color: "hsl(var(--muted-foreground) / 0.7)" }}>
-                        Nenhum usuario conectado
-                      </div>
-                    );
-                  }
-                  return presenceRoster.map((p: any) => {
-                    const checked = pendingTextControllerUserIds.has(p.userId);
-                    return (
-                      <label
-                        key={p.userId}
-                        className="flex items-center justify-between text-xs rounded-lg px-3 py-2 cursor-pointer"
-                        style={{ background: "hsl(var(--muted) / 0.5)", border: "1px solid hsl(var(--border))" }}
-                      >
-                        <div className="flex items-center gap-2 min-w-0">
-                          <div className="w-6 h-6 rounded-full bg-amber-500/20 flex items-center justify-center text-[10px] font-bold shrink-0" style={{ color: "hsl(var(--primary))" }}>
-                            {String(p.name || "?")[0] || "?"}
-                          </div>
-                          <div className="min-w-0">
-                            <div className="flex items-center gap-2 min-w-0">
-                              <span className="truncate" style={{ color: "hsl(var(--foreground) / 0.85)" }}>{p.name || "Usuario"}</span>
-                              {checked && (
-                                <span className="text-[9px] px-1.5 py-0.5 rounded bg-amber-500/15 uppercase shrink-0" style={{ color: "hsl(var(--primary))" }}>
-                                  Autorizado
-                                </span>
-                              )}
-                            </div>
-                            <div className="text-[10px] uppercase" style={{ color: "hsl(var(--muted-foreground) / 0.5)" }}>
-                              {String(p.role || "").replace(/_/g, " ") || "participante"}
-                            </div>
-                          </div>
-                        </div>
-                        <input
-                          type="checkbox"
-                          checked={checked}
-                          onChange={() => {
-                            setPendingTextControllerUserIds((prev) => {
-                              const next = new Set(prev);
-                              if (next.has(p.userId)) next.delete(p.userId);
-                              else next.add(p.userId);
-                              return next;
-                            });
-                          }}
-                          className="h-4 w-4 accent-amber-500"
-                          data-testid={`checkbox-text-controller-${p.userId}`}
-                        />
-                      </label>
-                    );
-                  });
-                })()}
-              </div>
             </div>
 
-            <div className="flex justify-end gap-2 px-6 py-4 shrink-0" style={{ borderTop: "1px solid hsl(var(--border))" }}>
+            {/* ── User list (scrollable) ── */}
+            <div style={{ flex: 1, overflowY: "auto", padding: "0 16px", display: "flex", flexDirection: "column", gap: 6 }}>
+              {!presenceRoster.length ? (
+                <div style={{ textAlign: "center", padding: "32px 0", fontSize: 12, color: "hsl(var(--muted-foreground) / 0.5)" }}>
+                  Nenhum usuario conectado
+                </div>
+              ) : presenceRoster.map((p: any) => {
+                const checked = pendingTextControllerUserIds.has(p.userId);
+                return (
+                  <label
+                    key={p.userId}
+                    style={{
+                      display: "flex", alignItems: "center", justifyContent: "space-between",
+                      padding: "8px 12px", borderRadius: 8, cursor: "pointer",
+                      background: checked ? "rgba(245,158,11,0.07)" : "hsl(var(--muted) / 0.5)",
+                      border: `1px solid ${checked ? "rgba(245,158,11,0.25)" : "hsl(var(--border))"}`,
+                      transition: "background .12s, border-color .12s",
+                    }}
+                  >
+                    <div style={{ display: "flex", alignItems: "center", gap: 8, minWidth: 0 }}>
+                      <div style={{
+                        width: 28, height: 28, borderRadius: "50%", flexShrink: 0,
+                        background: checked ? "rgba(245,158,11,0.18)" : "rgba(255,255,255,0.06)",
+                        border: `1px solid ${checked ? "rgba(245,158,11,0.3)" : "rgba(255,255,255,0.08)"}`,
+                        display: "flex", alignItems: "center", justifyContent: "center",
+                        fontSize: 11, fontWeight: 800,
+                        color: checked ? "#fbbf24" : "hsl(var(--muted-foreground))",
+                        transition: "all .12s",
+                      }}>
+                        {String(p.name || "?")[0]?.toUpperCase() || "?"}
+                      </div>
+                      <div style={{ minWidth: 0 }}>
+                        <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+                          <span style={{ fontSize: 12, fontWeight: 600, color: "hsl(var(--foreground) / 0.9)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                            {p.name || "Usuario"}
+                          </span>
+                          {checked && (
+                            <span style={{ fontSize: 8, padding: "1px 5px", borderRadius: 4, background: "rgba(245,158,11,0.15)", color: "#fbbf24", fontWeight: 800, letterSpacing: "0.08em", textTransform: "uppercase", flexShrink: 0 }}>
+                              Autorizado
+                            </span>
+                          )}
+                        </div>
+                        <div style={{ fontSize: 9, textTransform: "uppercase", letterSpacing: "0.06em", color: "hsl(var(--muted-foreground) / 0.45)", marginTop: 1 }}>
+                          {String(p.role || "").replace(/_/g, " ") || "participante"}
+                        </div>
+                      </div>
+                    </div>
+                    <input
+                      type="checkbox"
+                      checked={checked}
+                      onChange={() => {
+                        setPendingTextControllerUserIds((prev) => {
+                          const next = new Set(prev);
+                          if (next.has(p.userId)) next.delete(p.userId);
+                          else next.add(p.userId);
+                          return next;
+                        });
+                      }}
+                      style={{ width: 15, height: 15, accentColor: "#f59e0b", flexShrink: 0 }}
+                      data-testid={`checkbox-text-controller-${p.userId}`}
+                    />
+                  </label>
+                );
+              })}
+            </div>
+
+            {/* ── Footer: cancel / apply ── */}
+            <div style={{ display: "flex", justifyContent: "flex-end", gap: 8, padding: "10px 16px", borderTop: "1px solid hsl(var(--border))", flexShrink: 0 }}>
               <button
                 onClick={() => setTextControlPopupOpen(false)}
                 className="vhub-btn-xs vhub-btn-secondary"
@@ -2573,7 +3118,7 @@ export default function RecordingRoom() {
               </button>
             </div>
           </div>
-        </div>
+        </FloatingPanel>
       )}
 
       <header className="shrink-0 flex flex-col sm:flex-row sm:items-center sm:justify-between px-2 sm:px-5 py-2 sm:py-0 gap-2 sm:gap-0" style={{ background: "var(--room-header-bg)", backdropFilter: "blur(16px)", WebkitBackdropFilter: "blur(16px)", borderBottom: "1px solid var(--room-header-border)", boxShadow: "0 1px 3px rgba(0,0,0,0.06)" }}>
@@ -2603,23 +3148,6 @@ export default function RecordingRoom() {
 
         <div className="relative -mx-2 px-2 sm:mx-0 sm:px-0 overflow-x-auto" style={{ WebkitOverflowScrolling: "touch" as any }}>
           <div className="flex items-center gap-3 text-xs whitespace-nowrap">
-          {(isPrivileged || isDirector) && (
-            <>
-              <button
-                onClick={() => {
-                  setPendingTextControllerUserIds(new Set(textControllerUserIds));
-                  setTextControlPopupOpen(true);
-                }}
-                className="flex items-center gap-1.5 transition-colors"
-                style={{ color: textControlPopupOpen ? "hsl(var(--primary))" : "hsl(var(--muted-foreground))" }}
-                data-testid="button-open-text-control"
-              >
-                <Edit3 className="w-3.5 h-3.5" />
-                <span className="hidden sm:inline">Controle de Texto</span>
-              </button>
-              <div className="hidden sm:block w-px h-4" style={{ background: "hsl(var(--border))" }} />
-            </>
-          )}
           {!micReady && (
             <span className="flex items-center gap-1" style={{ color: "hsl(0 72% 65%)" }}>
               <MicOff className="w-3.5 h-3.5" /> <span className="hidden sm:inline">Sem mic</span>
@@ -2684,18 +3212,6 @@ export default function RecordingRoom() {
             </button>
           )}
           <div className="hidden sm:block w-px h-4" style={{ background: "hsl(var(--border))" }} />
-          {(isPrivileged || isDirector) && (
-            <button
-              onClick={() => setTakesPopupOpen(true)}
-              className="transition-colors"
-              style={{ color: "hsl(var(--muted-foreground))" }}
-              data-testid="button-open-takes-popup"
-            >
-              <CheckCircle2 className="w-3.5 h-3.5 inline mr-1" style={{ color: "hsl(160 84% 60%)" }} />
-              <span className="hidden sm:inline">{takeCount} take{takeCount !== 1 ? "s" : ""}</span>
-            </button>
-          )}
-          <div className="hidden sm:block w-px h-4" style={{ background: "hsl(var(--border))" }} />
           <button
             onClick={() => setDeviceSettingsOpen(true)}
             className="flex items-center gap-1.5 transition-colors" style={{ color: "hsl(var(--muted-foreground))" }}
@@ -2717,40 +3233,104 @@ export default function RecordingRoom() {
         </div>
       </header>
 
-      <div ref={splitContainerRef} className="flex-1 flex flex-row overflow-hidden">
-        <div className="flex flex-col min-h-0" style={{ width: `${splitRatio * 100}%`, minWidth: "25%", maxWidth: "80%" }}>
-          <div className="flex-1 min-h-[240px] relative overflow-hidden" style={{ background: "rgb(10,10,14)", border: "1px solid rgba(0,0,0,0.15)", margin: "4px 4px 0 4px", borderRadius: "12px" }}>
-            {production?.videoUrl ? (
-              <video
-                ref={videoRef}
-                src={production.videoUrl}
-                className="w-full h-full object-contain"
-                onPlay={() => setIsPlaying(true)}
-                onPause={() => setIsPlaying(false)}
-                muted={isMuted}
-                playsInline
-                disablePictureInPicture
-                controls={false}
-                controlsList="nodownload noplaybackrate noremoteplayback nofullscreen"
-              />
-            ) : (
-              <div className="w-full h-full flex flex-col items-center justify-center gap-3" style={{ color: "rgba(255,255,255,0.50)" }}>
-                <div className="w-16 h-16 rounded-2xl flex items-center justify-center" style={{ background: "rgba(255,255,255,0.10)" }}>
-                  <Play className="w-7 h-7" />
-                </div>
-                <p className="text-xs">Nenhum video anexado a esta producao</p>
+      <div ref={splitContainerRef} className="flex-1 flex overflow-hidden" style={{ flexDirection: isMobile ? 'column' : 'row' }}>
+        <div className="flex flex-col" style={isMobile
+          ? { width: '100%', height: `${mobileVideoH}vh`, flexShrink: 0 }
+          : { width: `${splitRatio * 100}%`, minWidth: '25%', maxWidth: '80%', minHeight: 0 }}>
+          {/* Video container — always rendered here; when floating a placeholder is shown */}
+          <div
+            className="flex-1 relative overflow-hidden"
+            style={{ minHeight: isMobile ? 0 : 240, background: "rgb(10,10,14)", border: "1px solid rgba(0,0,0,0.15)", margin: "4px 4px 0 4px", borderRadius: "12px" }}
+            onDoubleClick={() => setVideoFloating(f => !f)}
+          >
+            {videoFloating ? (
+              /* Placeholder shown in layout when video is floating */
+              <div className="w-full h-full flex flex-col items-center justify-center gap-2" style={{ color: "rgba(255,255,255,0.3)" }}>
+                <Maximize2 className="w-6 h-6" />
+                <p className="text-xs">Vídeo destacado</p>
+                <p className="text-[10px]" style={{ color: "rgba(255,255,255,0.2)" }}>Duplo clique para recolher</p>
               </div>
+            ) : (
+              <>
+                {production?.videoUrl ? (
+                  <video
+                    ref={videoRef}
+                    src={production.videoUrl}
+                    className="w-full h-full object-contain"
+                    onPlay={() => setIsPlaying(true)}
+                    onPause={() => setIsPlaying(false)}
+                    onLoadedMetadata={(e) => {
+                      const v = e.currentTarget;
+                      v.volume = deviceSettings.monitorVolume;
+                      // @ts-ignore
+                      if (deviceSettings.outputDeviceId && typeof v.setSinkId === "function") {
+                        v.setSinkId(deviceSettings.outputDeviceId).catch(() => {});
+                      }
+                    }}
+                    muted={isMuted}
+                    playsInline
+                    disablePictureInPicture
+                    controls={false}
+                    controlsList="nodownload noplaybackrate noremoteplayback nofullscreen"
+                  />
+                ) : (
+                  <div className="w-full h-full flex flex-col items-center justify-center gap-3" style={{ color: "rgba(255,255,255,0.50)" }}>
+                    <div className="w-16 h-16 rounded-2xl flex items-center justify-center" style={{ background: "rgba(255,255,255,0.10)" }}>
+                      <Play className="w-7 h-7" />
+                    </div>
+                    <p className="text-xs">Nenhum video anexado a esta producao</p>
+                  </div>
+                )}
+                <button
+                  onClick={(e) => { e.stopPropagation(); setIsMuted((m) => !m); }}
+                  className="absolute top-3 right-3 p-2 rounded-xl bg-black/40 text-zinc-400 hover:text-white transition-all hover:bg-black/60"
+                  data-testid="button-mute"
+                >
+                  {isMuted ? <VolumeX className="w-4 h-4" /> : <Volume2 className="w-4 h-4" />}
+                </button>
+              </>
             )}
-
-
-            <button
-              onClick={() => setIsMuted((m) => !m)}
-              className="absolute top-3 right-3 p-2 rounded-xl bg-black/40 text-zinc-400 hover:text-white transition-all hover:bg-black/60"
-              data-testid="button-mute"
-            >
-              {isMuted ? <VolumeX className="w-4 h-4" /> : <Volume2 className="w-4 h-4" />}
-            </button>
           </div>
+
+          {/* Floating video PiP panel */}
+          {videoFloating && (
+            <FloatingPanel title="Vídeo" onClose={() => setVideoFloating(false)} initialWidth={520} initialHeight={320}>
+              <div style={{ width: "100%", height: "100%", background: "rgb(10,10,14)", position: "relative" }} onDoubleClick={() => setVideoFloating(false)}>
+                {production?.videoUrl ? (
+                  <video
+                    ref={videoRef}
+                    src={production.videoUrl}
+                    className="w-full h-full object-contain"
+                    onPlay={() => setIsPlaying(true)}
+                    onPause={() => setIsPlaying(false)}
+                    onLoadedMetadata={(e) => {
+                      const v = e.currentTarget;
+                      v.volume = deviceSettings.monitorVolume;
+                      // @ts-ignore
+                      if (deviceSettings.outputDeviceId && typeof v.setSinkId === "function") {
+                        v.setSinkId(deviceSettings.outputDeviceId).catch(() => {});
+                      }
+                    }}
+                    muted={isMuted}
+                    playsInline
+                    disablePictureInPicture
+                    controls={false}
+                    controlsList="nodownload noplaybackrate noremoteplayback nofullscreen"
+                  />
+                ) : (
+                  <div className="w-full h-full flex items-center justify-center" style={{ color: "rgba(255,255,255,0.4)" }}>
+                    <p className="text-xs">Nenhum vídeo</p>
+                  </div>
+                )}
+                <button
+                  onClick={(e) => { e.stopPropagation(); setIsMuted((m) => !m); }}
+                  className="absolute top-2 right-2 p-1.5 rounded-lg bg-black/50 text-zinc-400 hover:text-white transition-all"
+                >
+                  {isMuted ? <VolumeX className="w-3.5 h-3.5" /> : <Volume2 className="w-3.5 h-3.5" />}
+                </button>
+              </div>
+            </FloatingPanel>
+          )}
 
           {videoDuration > 0 && (
             <div className="px-3 sm:px-5 py-2" style={{ background: "hsl(var(--muted) / 0.4)", borderTop: "1px solid hsl(var(--border))" }}>
@@ -2825,8 +3405,9 @@ export default function RecordingRoom() {
 
             <div className="w-full sm:w-auto flex flex-row sm:flex-row items-center justify-center gap-2">
               <button
-                onClick={() => seek(-2)}
-                className="w-8 h-8 sm:w-9 sm:h-9 rounded-xl flex items-center justify-center transition-all" style={{ color: "hsl(var(--muted-foreground))", background: "hsl(var(--muted))" }}
+                onClick={canTextControl ? () => seek(-2) : undefined}
+                disabled={!canTextControl}
+                className="w-8 h-8 sm:w-9 sm:h-9 rounded-xl flex items-center justify-center transition-all disabled:opacity-40 disabled:cursor-not-allowed" style={{ color: "hsl(var(--muted-foreground))", background: "hsl(var(--muted))" }}
                 data-testid="button-back-2s"
                 title={`Back 2s (${keyLabel(shortcuts.back)})`}
               >
@@ -2834,8 +3415,9 @@ export default function RecordingRoom() {
               </button>
 
               <button
-                onClick={handlePlayPause}
-                className="w-10 h-10 sm:w-11 sm:h-11 rounded-full flex items-center justify-center transition-all" style={{ background: "hsl(var(--secondary))", color: "hsl(var(--foreground))", border: "1px solid hsl(var(--border))", boxShadow: "0 2px 8px rgba(0,0,0,0.08)" }}
+                onClick={canTextControl ? handlePlayPause : undefined}
+                disabled={!canTextControl}
+                className="w-10 h-10 sm:w-11 sm:h-11 rounded-full flex items-center justify-center transition-all disabled:opacity-40 disabled:cursor-not-allowed" style={{ background: "hsl(var(--secondary))", color: "hsl(var(--foreground))", border: "1px solid hsl(var(--border))", boxShadow: "0 2px 8px rgba(0,0,0,0.08)" }}
                 data-testid="button-play-pause"
                 title={`Play/Pause (${keyLabel(shortcuts.playPause)})`}
               >
@@ -2843,8 +3425,9 @@ export default function RecordingRoom() {
               </button>
 
               <button
-                onClick={recordingStatus === "recording" ? handleStopRecording : handleStopPlayback}
-                className="w-8 h-8 sm:w-9 sm:h-9 rounded-xl flex items-center justify-center transition-all" style={{ color: "hsl(var(--muted-foreground))", background: "hsl(var(--muted))" }}
+                onClick={canTextControl ? (recordingStatus === "recording" ? handleStopRecording : handleStopPlayback) : undefined}
+                disabled={!canTextControl}
+                className="w-8 h-8 sm:w-9 sm:h-9 rounded-xl flex items-center justify-center transition-all disabled:opacity-40 disabled:cursor-not-allowed" style={{ color: "hsl(var(--muted-foreground))", background: "hsl(var(--muted))" }}
                 data-testid="button-stop"
                 title={`Stop (${keyLabel(shortcuts.stop)})`}
               >
@@ -2855,8 +3438,8 @@ export default function RecordingRoom() {
 
               {recordingStatus === "idle" || recordingStatus === "countdown" ? (
                 <button
-                  onClick={startCountdown}
-                  disabled={!micReady || recordingStatus === "countdown"}
+                  onClick={canTextControl ? startCountdown : undefined}
+                  disabled={!canTextControl || !micReady || recordingStatus === "countdown"}
                   className="w-12 h-12 sm:w-14 sm:h-14 rounded-full flex items-center justify-center transition-all disabled:opacity-30"
                   style={recordingStatus === "countdown"
                     ? { background: "hsl(var(--primary) / 0.12)", border: "1px solid hsl(var(--primary) / 0.30)", cursor: "wait", color: "hsl(var(--primary))" }
@@ -2869,8 +3452,9 @@ export default function RecordingRoom() {
                 </button>
               ) : recordingStatus === "recording" ? (
                 <button
-                  onClick={handleStopRecording}
-                  className="w-12 h-12 sm:w-14 sm:h-14 rounded-full flex items-center justify-center transition-all"
+                  onClick={canTextControl ? handleStopRecording : undefined}
+                  disabled={!canTextControl}
+                  className="w-12 h-12 sm:w-14 sm:h-14 rounded-full flex items-center justify-center transition-all disabled:opacity-30"
                   style={{ background: "hsl(0 72% 55%)", boxShadow: "0 0 24px rgba(239,68,68,0.4), 0 4px 12px rgba(0,0,0,0.3)" }}
                   data-testid="button-stop-recording"
                   title={`Stop recording (${keyLabel(shortcuts.stop)})`}
@@ -2882,8 +3466,9 @@ export default function RecordingRoom() {
               <div className="hidden sm:block w-px h-8 mx-1" style={{ background: "hsl(var(--border))" }} />
 
               <button
-                onClick={() => seek(2)}
-                className="w-8 h-8 sm:w-9 sm:h-9 rounded-xl flex items-center justify-center transition-all" style={{ color: "hsl(var(--muted-foreground))", background: "hsl(var(--muted))" }}
+                onClick={canTextControl ? () => seek(2) : undefined}
+                disabled={!canTextControl}
+                className="w-8 h-8 sm:w-9 sm:h-9 rounded-xl flex items-center justify-center transition-all disabled:opacity-40 disabled:cursor-not-allowed" style={{ color: "hsl(var(--muted-foreground))", background: "hsl(var(--muted))" }}
                 data-testid="button-forward-2s"
                 title={`Forward 2s (${keyLabel(shortcuts.forward)})`}
               >
@@ -2891,7 +3476,7 @@ export default function RecordingRoom() {
               </button>
 
               <button
-                onClick={() => {
+                onClick={canTextControl ? () => {
                   if (loopSelectionMode === "idle") {
                     setLoopSelectionMode("selecting-start");
                     setIsLooping(true);
@@ -2902,8 +3487,9 @@ export default function RecordingRoom() {
                     setIsLooping(false);
                     emitVideoEvent("sync-loop", { loopRange: null });
                   }
-                }}
-                className="w-9 h-9 rounded-xl flex items-center justify-center transition-all"
+                } : undefined}
+                disabled={!canTextControl}
+                className="w-9 h-9 rounded-xl flex items-center justify-center transition-all disabled:opacity-40 disabled:cursor-not-allowed"
                 style={isLooping || loopSelectionMode !== "idle"
                   ? { background: "hsl(var(--primary) / 0.12)", color: "hsl(var(--primary))", boxShadow: "0 0 0 1px hsl(var(--primary) / 0.30)" }
                   : { color: "hsl(var(--muted-foreground))", background: "hsl(var(--muted))" }
@@ -2941,23 +3527,55 @@ export default function RecordingRoom() {
           </div>
         </div>
 
-        {/* Divisória arrastável — oculta em mobile */}
-        <div
-          className="hidden md:flex shrink-0 items-center justify-center cursor-col-resize group relative select-none"
-          style={{ width: 6, background: "hsl(var(--border))" }}
-          onPointerDown={handleDividerPointerDown}
-        >
+        {/* Mobile drag divider — between video and script */}
+        {isMobile ? (
           <div
-            className="w-0.5 h-8 rounded-full opacity-0 group-hover:opacity-100 transition-opacity"
-            style={{ background: "hsl(var(--primary) / 0.6)" }}
-          />
-        </div>
+            style={{
+              height: 44, width: '100%', flexShrink: 0,
+              background: 'rgba(15,17,30,0.95)',
+              borderTop: '1px solid hsl(var(--border) / 0.5)',
+              borderBottom: '1px solid hsl(var(--border) / 0.5)',
+              display: 'flex', alignItems: 'center', justifyContent: 'center',
+              cursor: 'row-resize', touchAction: 'none', userSelect: 'none',
+            }}
+            onPointerDown={handleMobileDividerDown}
+            onPointerMove={handleMobileDividerMove}
+            onPointerUp={handleMobileDividerUp}
+          >
+            <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 4 }}>
+              <div style={{ width: 40, height: 3, borderRadius: 2, background: 'hsl(var(--primary) / 0.45)' }} />
+              <div style={{ width: 24, height: 2, borderRadius: 1, background: 'hsl(var(--primary) / 0.25)' }} />
+            </div>
+          </div>
+        ) : (
+          /* Divisória arrastável — desktop apenas */
+          <div
+            className="hidden md:flex shrink-0 items-center justify-center cursor-col-resize group relative select-none"
+            style={{ width: 6, background: "hsl(var(--border))" }}
+            onPointerDown={handleDividerPointerDown}
+          >
+            <div
+              className="w-0.5 h-8 rounded-full opacity-0 group-hover:opacity-100 transition-opacity"
+              style={{ background: "hsl(var(--primary) / 0.6)" }}
+            />
+          </div>
+        )}
 
         <div className="flex flex-col min-h-0 flex-1 min-w-0 bg-muted/30">
           <div className="h-11 shrink-0 px-5 flex items-center justify-between" style={{ borderBottom: "1px solid hsl(var(--border))", background: "hsl(var(--card))" }}>
-            <span className="text-[11px] font-semibold uppercase tracking-widest" style={{ color: "hsl(var(--muted-foreground) / 0.7)" }}>
-              Roteiro
-            </span>
+            <div className="flex items-center gap-2">
+              <span className="text-[11px] font-semibold uppercase tracking-widest" style={{ color: "hsl(var(--muted-foreground) / 0.7)" }}>
+                Roteiro
+              </span>
+              <button
+                type="button"
+                onClick={() => setScriptFloating(f => !f)}
+                title={scriptFloating ? "Recolher roteiro" : "Destacar roteiro (PiP)"}
+                style={{ display: "flex", alignItems: "center", justifyContent: "center", width: 20, height: 20, borderRadius: 5, background: scriptFloating ? "hsl(var(--primary) / 0.12)" : "hsl(var(--muted))", border: `1px solid ${scriptFloating ? "hsl(var(--primary) / 0.3)" : "hsl(var(--border))"}`, color: scriptFloating ? "hsl(var(--primary))" : "hsl(var(--muted-foreground))", cursor: "pointer" }}
+              >
+                {scriptFloating ? <Minimize2 style={{ width: 10, height: 10 }} /> : <Maximize2 style={{ width: 10, height: 10 }} />}
+              </button>
+            </div>
             <div className="flex items-center gap-2">
               <button
                 type="button"
@@ -3017,15 +3635,17 @@ export default function RecordingRoom() {
             </div>
           </div>
 
-          <div
-            ref={scriptViewportRef}
-            className="flex-1 overflow-y-auto py-3 px-4 min-h-0 relative"
-            style={{ scrollBehavior: "auto", WebkitOverflowScrolling: "touch" as any }}
-            onScroll={handleScriptViewportScroll}
-            onWheelCapture={markScriptUserScrollIntent}
-            onTouchMoveCapture={markScriptUserScrollIntent}
-            onPointerDownCapture={markScriptUserScrollIntent}
-          >
+          {scriptFloating && (
+            <FloatingPanel title="Roteiro" onClose={() => setScriptFloating(false)} initialWidth={400} initialHeight={520}>
+              <div
+                ref={scriptViewportRef}
+                className="flex-1 overflow-y-auto py-3 px-4 min-h-0 relative"
+                style={{ scrollBehavior: "auto", WebkitOverflowScrolling: "touch" as any, height: "100%", background: "hsl(var(--background))" }}
+                onScroll={handleScriptViewportScroll}
+                onWheelCapture={markScriptUserScrollIntent}
+                onTouchMoveCapture={markScriptUserScrollIntent}
+                onPointerDownCapture={markScriptUserScrollIntent}
+              >
 
             {scriptLines.length > 1 && (
               <div className="absolute right-1 top-3 bottom-3 w-[3px] rounded-full" style={{ background: "hsl(var(--border))", pointerEvents: "none" }}>
@@ -3163,170 +3783,202 @@ export default function RecordingRoom() {
                 </div>
               );
             })}
-          </div>
+              </div>
+            </FloatingPanel>
+          )}
+
+          {!scriptFloating && (
+            <div
+              ref={scriptViewportRef}
+              className="flex-1 overflow-y-auto min-h-0 relative"
+              style={{
+                scrollBehavior: "auto",
+                WebkitOverflowScrolling: "touch" as any,
+                padding: isMobile ? "20px 12px 64px" : "12px 16px",
+              }}
+              onScroll={handleScriptViewportScroll}
+              onWheelCapture={markScriptUserScrollIntent}
+              onTouchMoveCapture={markScriptUserScrollIntent}
+              onPointerDownCapture={markScriptUserScrollIntent}
+              onDoubleClick={() => setScriptFloating(true)}
+            >
+              {scriptLines.length > 1 && (
+                <div className="absolute right-1 top-3 bottom-3 w-[3px] rounded-full" style={{ background: "hsl(var(--border))", pointerEvents: "none" }}>
+                  <div
+                    className="absolute left-0 right-0 mx-auto w-full rounded-full transition-[top] duration-500 ease-out"
+                    style={{
+                      height: 34,
+                      top: `${(currentLine / Math.max(1, scriptLines.length - 1)) * 100}%`,
+                      transform: "translateY(-50%)",
+                      background: "hsl(var(--primary) / 0.50)",
+                      boxShadow: "0 0 0 1px hsl(var(--primary) / 0.18)",
+                    }}
+                  />
+                </div>
+              )}
+              {scriptLines.length === 0 && !session && (
+                <div className="flex flex-col items-center justify-center h-full gap-3" style={{ color: "hsl(var(--muted-foreground) / 0.7)" }}>
+                  <div className="w-10 h-10 rounded-full animate-spin" style={{ border: "2px solid hsl(var(--border))", borderTopColor: "hsl(var(--primary))" }} />
+                  <p className="text-sm">Carregando sessao...</p>
+                </div>
+              )}
+              {scriptLines.length === 0 && session && (
+                <div className="flex flex-col items-center justify-center h-full gap-2" style={{ color: "hsl(var(--muted-foreground) / 0.7)" }}>
+                  <p className="text-sm">Nenhum roteiro carregado</p>
+                  <p className="text-xs">Adicione um roteiro a producao para ver as falas aqui</p>
+                </div>
+              )}
+              {scriptLines
+                .map((line, originalIndex) => ({ line, originalIndex }))
+                .filter(({ line }) => !showOnlyMyCharacter || !recordingProfile || line.character.toLowerCase().trim() === recordingProfile.characterName.toLowerCase().trim())
+                .map(({ line, originalIndex: i }) => {
+                const isActive = currentLines.has(i);
+                const isDone = savedTakes.has(i);
+                const isInLoop = customLoop && line.start >= customLoop.start && (line.end || line.start) <= customLoop.end;
+                const lineTakes = takesList.filter((t: any) => t.lineIndex === i);
+                return (
+                  <div
+                    key={i}
+                    ref={(el) => { lineRefs.current[i] = el; }}
+                    onClick={canTextControl ? (() => handleLineClick(i)) : undefined}
+                    className={`mb-3 px-5 py-4 lg:px-6 lg:py-5 rounded-xl transition-[background,box-shadow,opacity] duration-500 ease-out relative overflow-hidden ${canTextControl ? "cursor-pointer" : "cursor-default"}`}
+                    style={{
+                      background: isActive
+                        ? "linear-gradient(90deg, var(--room-script-active-bg) 0%, transparent 72%)"
+                        : isInLoop ? "hsl(var(--primary) / 0.04)" : "transparent",
+                      boxShadow: isActive
+                        ? "0 2px 16px hsl(217 60% 60% / 0.07)"
+                        : isInLoop && !isActive ? "inset 0 0 0 1px hsl(var(--primary) / 0.12)" : "none",
+                      ...(canTextControl ? {} : { opacity: 0.92 }),
+                    }}
+                    data-testid={`script-line-${i}`}
+                  >
+                    <div className="absolute left-0 top-2 bottom-2 rounded-full transition-[width,opacity,background-color] duration-500 ease-out" style={{ width: isActive ? 3 : isInLoop ? 2 : 0, opacity: isActive ? 0.65 : isInLoop ? 0.45 : 0, background: isActive ? "var(--room-script-active-accent)" : "hsl(38 92% 55%)" }} />
+                    <div className="flex items-center gap-3 mb-2 lg:mb-3">
+                      <span className="text-[16px] lg:text-[16px] font-mono tabular-nums font-medium" style={{ color: "hsl(var(--muted-foreground))" }}>{formatTimecode(line.start)}</span>
+                      <span className="font-extrabold uppercase tracking-[0.5px] transition-colors duration-500 ease-out leading-tight" style={{ fontSize: Math.round(24 * scriptFontScale), color: isActive ? "hsl(var(--primary))" : "hsl(var(--muted-foreground) / 0.45)" }}>{line.character}</span>
+                      {canTextControl && (
+                        <button onClick={(e) => { e.stopPropagation(); setEditingLineIndex(i); setEditingLineText(lineEdits[i] ?? line.text); }} className="ml-1 p-1 rounded transition-colors" title="Editar fala" data-testid={`button-edit-line-${i}`} style={{ color: "hsl(var(--muted-foreground) / 0.7)" }}>
+                          <Edit3 className="w-3.5 h-3.5" />
+                        </button>
+                      )}
+                      {isDone && lineTakes.length > 0 && (
+                        <span className="ml-auto flex items-center gap-1 text-[10px] font-medium px-1.5 py-0.5 rounded-full" style={{ background: "hsl(142 72% 95%)", color: "hsl(142 60% 36%)", border: "1px solid hsl(142 72% 80%)" }}>
+                          <CheckCircle2 className="w-3 h-3" />{lineTakes.length}
+                        </span>
+                      )}
+                    </div>
+                    <p className="leading-relaxed" style={{ fontSize: Math.round(18 * scriptFontScale), color: isActive ? "hsl(var(--foreground))" : "hsl(var(--muted-foreground))", fontWeight: isActive ? 500 : 400, opacity: isActive ? 1 : 0.72 }}>
+                      {lineEdits[i] ?? line.text}
+                    </p>
+                  </div>
+                );
+              })}
+            </div>
+          )}
+
+          {scriptFloating && (
+            <div className="flex-1 flex flex-col items-center justify-center gap-2" style={{ color: "hsl(var(--muted-foreground) / 0.4)" }}>
+              <Maximize2 className="w-5 h-5" />
+              <p className="text-xs">Roteiro destacado</p>
+            </div>
+          )}
 
         </div>
       </div>
 
+      {(isDirector || isPrivileged) && (
+        <>
+          {/* ── Handle de redimensionamento da timeline ── */}
+          <div
+            onPointerDown={handleDawResizePointerDown}
+            style={{
+              height: 6, flexShrink: 0, cursor: "row-resize",
+              background: "hsl(var(--border))",
+              display: "flex", alignItems: "center", justifyContent: "center",
+            }}
+          >
+            <div style={{ width: 32, height: 2, borderRadius: 2, background: "hsl(var(--primary) / 0.35)" }} />
+          </div>
+
+          {/* ── Timeline com altura controlada ── */}
+          <div style={{
+            height: dawTimelineH, flexShrink: 0,
+            overflowY: "auto", overflowX: "hidden",
+            background: "#060810",
+            position: "relative", zIndex: 2,
+          }}>
+        <DawTimeline
+          scriptLines={scriptLines}
+          currentLine={currentLine}
+          videoUrl={production?.videoUrl ?? ""}
+          voiceActorProfiles={voiceActorProfiles}
+          recordingProfile={recordingProfile ? { voiceActorId: user?.id || recordingProfile.voiceActorId || recordingProfile.userId || "", voiceActorName: recordingProfile.voiceActorName, characterName: recordingProfile.characterName } : null}
+          micState={micState}
+          recordingStatus={recordingStatus}
+          lastRecording={lastRecording}
+          recordingStartTime={recordingStartTimecodeRef.current}
+          videoTime={videoTime}
+          videoDuration={videoDuration}
+          isPlaying={isPlaying}
+          onSeekToTime={seekToTime}
+          approvedTakes={approvedTakes}
+          onSamplesEdited={handleSamplesEdited}
+          pendingApprovalTake={null}
+          approvalOffset={approvalOffset}
+          onApprovalOffsetChange={setApprovalOffset}
+          onApprovalTrim={handleApprovalTrim}
+          onTakeDecision={handleTakeDecision}
+          directorFeedback={directorFeedback}
+          onFeedbackChange={setDirectorFeedback}
+          remoteRecording={remoteRecording}
+          onDirectorPreview={handleDirectorPreview}
+          onLoopChange={(range) => { setCustomLoop(range); setIsLooping(!!range); }}
+          onTakeTrim={handleTakeTrim}
+          onTakeSplit={handleTakeSplit}
+          onTakeDelete={handleTakeDelete}
+          onTakeSilenceRemove={handleTakeSilenceRemove}
+          videoRef={videoRef}
+          onMuteVideo={handleMuteVideo}
+          onUnmuteVideo={handleUnmuteVideo}
+          onPlayVideo={() => { if (videoRef.current) { videoRef.current.play().catch(() => {}); setIsPlaying(true); } }}
+          takesList={takesList}
+          isDirectorOrPrivileged={isDirector || isPrivileged}
+          userId={user?.id}
+          takeCacheBust={takeCacheBust}
+          calculateEndLine={calculateEndLine}
+          onDownloadTake={handleDownloadTake}
+        />
+          </div>
+        </>
+      )}
+
       <DailyMeetPanel sessionId={sessionId} />
 
-      {/* Voice Actor Approval Popup */}
-      {!isDirector && pendingApprovalTake && (
-        <Dialog open={true} onOpenChange={() => {
-          if (approvalStatus === 'approved' || approvalStatus === 'rejected') {
+      {/* ── Director Control PiP ── */}
+      {(isDirector || isPrivileged || !!pendingApprovalTake || !!approvalStatus) && (
+        <DirectorControlPip
+          pendingTake={pendingApprovalTake as any}
+          approvalStatus={approvalStatus}
+          directorFeedback={directorFeedback}
+          isDirector={isDirector || isPrivileged}
+          onApprovalTrim={handleApprovalTrim}
+          onTakeDecision={handleTakeDecision}
+          onFeedbackChange={setDirectorFeedback}
+          onDirectorPreview={handleDirectorPreview}
+          onDismiss={() => {
             setPendingApprovalTake(null);
             setApprovalStatus(null);
             setDirectorFeedback('');
             cleanupPreview();
-          }
-        }}>
-          <DialogContent className="max-w-md fixed bottom-4 right-4 translate-x-0 translate-y-0">
-            {approvalStatus === 'pending' && (
-              <>
-                <DialogHeader>
-                  <DialogTitle>✅ Take Gravado com Sucesso!</DialogTitle>
-                  <DialogDescription>
-                    Aguardando aprovação do diretor...
-                  </DialogDescription>
-                </DialogHeader>
-                <div className="flex items-center justify-center py-8">
-                  <div className="w-12 h-12 rounded-full animate-spin border-2 border-muted border-t-primary" />
-                </div>
-                <p className="text-sm text-center text-muted-foreground">
-                  {pendingApprovalTake.characterName} - Linha {pendingApprovalTake.lineIndex + 1}
-                </p>
-              </>
-            )}
-            
-            {approvalStatus === 'approved' && (
-              <>
-                <DialogHeader>
-                  <DialogTitle className="text-green-500">🎉 Take Aprovado!</DialogTitle>
-                </DialogHeader>
-                {directorFeedback && (
-                  <div className="bg-green-500/10 border border-green-500/20 rounded p-3">
-                    <p className="text-sm font-medium text-green-500 mb-1">Feedback do Diretor:</p>
-                    <p className="text-sm">{directorFeedback}</p>
-                  </div>
-                )}
-                <Button onClick={() => {
-                  setPendingApprovalTake(null);
-                  setApprovalStatus(null);
-                  setDirectorFeedback('');
-                  cleanupPreview();
-                }} className="w-full">Continuar Gravação</Button>
-              </>
-            )}
-            
-            {approvalStatus === 'rejected' && (
-              <>
-                <DialogHeader>
-                  <DialogTitle className="text-destructive">❌ Take Rejeitado</DialogTitle>
-                </DialogHeader>
-                <div className="bg-destructive/10 border border-destructive/20 rounded p-3">
-                  <p className="text-sm font-medium text-destructive mb-1">Feedback do Diretor:</p>
-                  <p className="text-sm">{directorFeedback || 'O diretor solicitou uma nova gravação.'}</p>
-                </div>
-                <Button onClick={() => {
-                  setPendingApprovalTake(null);
-                  setApprovalStatus(null);
-                  setDirectorFeedback('');
-                  cleanupPreview();
-                }} className="w-full">Gravar Novamente</Button>
-              </>
-            )}
-          </DialogContent>
-        </Dialog>
+          }}
+          presenceRoster={presenceRoster}
+          textControllerUserIds={textControllerUserIds}
+          onToggleTextControl={handleToggleTextControl}
+          onRevokeAllTextControl={handleRevokeAllTextControl}
+        />
       )}
 
-      {/* Director Approval Popup */}
-      {isDirector && pendingApprovalTake && !approvalStatus && (
-          <div className="fixed bottom-4 left-4 z-50 rounded-xl p-4" style={{ width: 420, background: "var(--room-modal-bg)", border: "1px solid hsl(var(--border))", boxShadow: "var(--room-modal-shadow)" }}>
-            <div className="flex items-start justify-between mb-3">
-              <div>
-                <p className="text-sm font-semibold" style={{ color: "hsl(var(--foreground))" }}>Revisar Take</p>
-                <p className="text-xs mt-0.5" style={{ color: "hsl(var(--muted-foreground))" }}>
-                  {pendingApprovalTake.voiceActorName} — {pendingApprovalTake.characterName} — Linha {pendingApprovalTake.lineIndex + 1}
-                </p>
-              </div>
-              <button
-                onClick={() => {
-                  setPendingApprovalTake(null);
-                  setApprovalOffset(0);
-                  if (approvalAudioRef.current) { approvalAudioRef.current.pause(); approvalAudioRef.current = null; }
-                  if (videoRef.current) { videoRef.current.volume = 1; }
-                }}
-                className="ml-2 mt-0.5 opacity-60 hover:opacity-100 transition-opacity"
-                style={{ color: "hsl(var(--muted-foreground))" }}
-              >
-                <X className="w-3.5 h-3.5" />
-              </button>
-            </div>
-
-            {/* Waveform editor */}
-            <div className="mb-3" style={{ borderBottom: "1px solid hsl(var(--border) / 0.5)", paddingBottom: 12 }}>
-              <TakeWaveformEditor
-                key={pendingApprovalTake.audioUrl}
-                audioUrl={pendingApprovalTake.audioUrl}
-                durationSeconds={pendingApprovalTake.durationSeconds}
-                onTrim={handleApprovalTrim}
-              />
-            </div>
-
-            {/* Timeline positioner */}
-            {videoDuration > 0 && (
-              <div className="mb-3" style={{ borderBottom: "1px solid hsl(var(--border) / 0.5)", paddingBottom: 12 }}>
-                <AudioTimelinePositioner
-                  key={pendingApprovalTake.durationSeconds}
-                  videoDuration={videoDuration}
-                  audioDuration={pendingApprovalTake.durationSeconds}
-                  startTimeSeconds={approvalOffset}
-                  onChange={setApprovalOffset}
-                />
-              </div>
-            )}
-            
-            <div className="space-y-2">
-              <Button 
-                onClick={handleDirectorPreview}
-                className="w-full h-8 text-xs"
-                size="sm"
-              >
-                <Play className="w-3 h-3 mr-1.5" />
-                Play Preview (offset ajustado)
-              </Button>
-              
-              <Textarea
-                value={directorFeedback}
-                onChange={(e) => setDirectorFeedback(e.target.value)}
-                placeholder="Feedback (opcional)..."
-                rows={2}
-                className="text-xs resize-none"
-                style={{ minHeight: "unset" }}
-              />
-              
-              <div className="flex gap-1.5">
-                <Button
-                  onClick={() => handleTakeDecision("approve", directorFeedback)}
-                  className="flex-1 h-8 text-xs bg-green-600 hover:bg-green-700"
-                  size="sm"
-                >
-                  <Check className="w-3 h-3 mr-1" />
-                  Aprovar
-                </Button>
-                <Button
-                  onClick={() => handleTakeDecision("reject", directorFeedback)}
-                  variant="destructive"
-                  className="flex-1 h-8 text-xs"
-                  size="sm"
-                >
-                  <X className="w-3 h-3 mr-1" />
-                  Rejeitar
-                </Button>
-              </div>
-            </div>
-          </div>
-      )}
     </div>
   );
 }

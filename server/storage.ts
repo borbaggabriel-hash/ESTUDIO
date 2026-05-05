@@ -331,6 +331,10 @@ export class DatabaseStorage implements IStorage {
     await db.update(takes).set({ durationSeconds }).where(eq(takes.id, takeId));
   }
 
+  async updateTakeStartTime(takeId: string, startTimeSeconds: number): Promise<void> {
+    await db.update(takes).set({ startTimeSeconds }).where(eq(takes.id, takeId));
+  }
+
   async setPreferredTake(takeId: string): Promise<Take> {
     const [targetTake] = await db.select().from(takes).where(eq(takes.id, takeId));
     if (!targetTake) throw new Error("Take not found");
@@ -486,6 +490,8 @@ export class DatabaseStorage implements IStorage {
         lineIndex: takes.lineIndex,
         audioUrl: takes.audioUrl,
         durationSeconds: takes.durationSeconds,
+        startTimeSeconds: takes.startTimeSeconds,
+        status: takes.status,
         isPreferred: takes.isPreferred,
         qualityScore: takes.qualityScore,
         aiRecommended: takes.aiRecommended,

@@ -364,7 +364,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
   app.get("/api/studios", requireAuth, async (req, res) => {
     const user = (req as any).user!;
     const userRole = normalizePlatformRole(user.role);
-    if (userRole === "platform_owner" || userRole === "diretor") {
+    if (userRole === "platform_owner") {
       const allStudios = await storage.getStudios();
       const studiosWithRoles = await Promise.all(
         allStudios.map(async (s) => ({ ...s, userRoles: [userRole] }))
@@ -568,12 +568,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       await storage.setUserStudioRoles(req.params.membershipId, roles);
       await storage.updateMembershipStatus(req.params.membershipId, "approved", roles[0]);
       
-      // Update user's global role if "diretor" is selected
-      if (roles.includes("diretor")) {
-        await storage.updateUserRole(membership.userId, "diretor");
-      } else if (roles.includes("studio_admin")) {
-        // Keep as is or set to something else if needed
-      }
+      // Note: diretor is a studio-level role only — no global role promotion
       
       res.status(200).json({ ok: true });
     } catch (err: any) {
@@ -1083,12 +1078,206 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
 
       await storage.updateTakeDuration(takeRecord.id, newDuration);
       await storage.updateTakeAudioUrl(takeRecord.id, newAudioUrl);
-      logger.info("[Take Trim] Updated duration and audioUrl", { takeId: takeRecord.id, newDuration, newAudioUrl });
+      // When trimming the beginning, shift startTimeSeconds so in-video position stays correct
+      let newStartTimeSeconds = (takeRecord as any).startTimeSeconds ?? 0;
+      if (startSeconds > 0) {
+        newStartTimeSeconds += startSeconds;
+        await storage.updateTakeStartTime(takeRecord.id, newStartTimeSeconds);
+      }
+      logger.info("[Take Trim] Updated duration and audioUrl", { takeId: takeRecord.id, newDuration, newAudioUrl, newStartTimeSeconds });
 
-      res.status(200).json({ audioUrl: newAudioUrl, durationSeconds: newDuration });
+      res.status(200).json({ audioUrl: newAudioUrl, durationSeconds: newDuration, startTimeSeconds: newStartTimeSeconds });
     } catch (err: any) {
       logger.error("[Take Trim] Error", { message: err?.message, stack: err?.stack });
       res.status(500).json({ message: err?.message || "Erro ao cortar take" });
+    }
+  });
+
+  app.post("/api/takes/:id/split", requireAuth, async (req, res) => {
+    try {
+      const { splitAtSeconds } = req.body;
+      if (typeof splitAtSeconds !== "number" || splitAtSeconds <= 0) {
+        return res.status(400).json({ message: "splitAtSeconds deve ser um numero positivo" });
+      }
+
+      const [takeRecord] = await db.select().from(takes).where(eq(takes.id, req.params.id));
+      if (!takeRecord) return res.status(404).json({ message: "Take nao encontrado" });
+
+      const userId = (req.user as any)?.id;
+      const userRole = (req.user as any)?.role;
+      const ADMIN_ROLES = ["platform_owner", "diretor", "director", "admin", "owner"];
+      const isAdmin = ADMIN_ROLES.includes(userRole);
+      if (!isAdmin && takeRecord.voiceActorId !== userId) {
+        return res.status(403).json({ message: "Voce so pode editar seus proprios takes" });
+      }
+
+      const audioUrl = (takeRecord as any).audioUrl || "";
+      if (!audioUrl) return res.status(400).json({ message: "Take nao tem audio" });
+      const totalDuration = (takeRecord as any).durationSeconds || 0;
+      if (splitAtSeconds >= totalDuration) {
+        return res.status(400).json({ message: "splitAtSeconds deve ser menor que a duracao do take" });
+      }
+
+      // Download audio
+      let audioBuffer: Buffer;
+      const supabaseParsed = parseSupabaseStorageUrl(audioUrl);
+      if (supabaseParsed && isSupabaseConfigured()) {
+        const downloaded = await downloadFromSupabaseStorageUrl(audioUrl);
+        audioBuffer = Buffer.from(await downloaded.arrayBuffer());
+      } else if (audioUrl.startsWith("/uploads/")) {
+        audioBuffer = fs.readFileSync(path.join(process.cwd(), "public", audioUrl));
+      } else {
+        return res.status(400).json({ message: "Audio nao suportado" });
+      }
+
+      // Build two buffers
+      const part1Buffer = trimWavBuffer(audioBuffer, 0, splitAtSeconds);
+      const part2Buffer = trimWavBuffer(audioBuffer, splitAtSeconds, totalDuration);
+
+      // Save part1 over original
+      if (supabaseParsed && isSupabaseConfigured()) {
+        await uploadToSupabaseStorage({ bucket: supabaseParsed.bucket, path: supabaseParsed.path, buffer: part1Buffer, contentType: "audio/wav" });
+      } else if (audioUrl.startsWith("/uploads/")) {
+        fs.writeFileSync(path.join(process.cwd(), "public", audioUrl), part1Buffer);
+      }
+      await storage.updateTakeDuration(takeRecord.id, splitAtSeconds);
+
+      // Save part2 as new file
+      const ext = path.extname(audioUrl) || ".wav";
+      const part2Filename = `take_split_${Date.now()}_${Math.random().toString(36).slice(2)}${ext}`;
+      let part2AudioUrl: string;
+      if (supabaseParsed && isSupabaseConfigured()) {
+        const splitPath = supabaseParsed.path.replace(/(\.[^.]+)$/, `_split_${Date.now()}$1`);
+        part2AudioUrl = await uploadToSupabaseStorage({ bucket: supabaseParsed.bucket, path: splitPath, buffer: part2Buffer, contentType: "audio/wav" });
+      } else {
+        const localPart2 = path.join(uploadsDir, part2Filename);
+        fs.writeFileSync(localPart2, part2Buffer);
+        part2AudioUrl = `/uploads/${part2Filename}`;
+      }
+
+      // Create take for part2 with startTimeSeconds = original + splitAtSeconds
+      const origStartTime = (takeRecord as any).startTimeSeconds ?? 0;
+      const part2Take = await storage.createTake(insertTakeSchema.parse({
+        sessionId: takeRecord.sessionId,
+        characterId: takeRecord.characterId,
+        voiceActorId: takeRecord.voiceActorId,
+        lineIndex: takeRecord.lineIndex,
+        audioUrl: part2AudioUrl,
+        durationSeconds: totalDuration - splitAtSeconds,
+        startTimeSeconds: origStartTime + splitAtSeconds,
+        status: (takeRecord as any).status ?? "approved",
+        voiceActorName: (takeRecord as any).voiceActorName ?? null,
+      }));
+
+      logger.info("[Take Split] Done", { origId: takeRecord.id, part2Id: part2Take.id, splitAtSeconds });
+      res.status(200).json({
+        part1: { id: takeRecord.id, audioUrl, durationSeconds: splitAtSeconds, startTimeSeconds: origStartTime },
+        part2: { id: part2Take.id, audioUrl: part2AudioUrl, durationSeconds: totalDuration - splitAtSeconds, startTimeSeconds: origStartTime + splitAtSeconds },
+      });
+    } catch (err: any) {
+      logger.error("[Take Split] Error", { message: err?.message, stack: err?.stack });
+      res.status(500).json({ message: err?.message || "Erro ao dividir take" });
+    }
+  });
+
+  // ── TAKES — SILENCE REMOVE ──────────────────────────────────────────────────
+  // Analisa o áudio e cria novos takes para cada região não-silenciosa.
+  // Recebe regiões com startSeconds/endSeconds RELATIVOS ao início do áudio do take.
+  // Apaga o take original e cria N novos takes.
+  app.post("/api/takes/:id/silence-remove", requireAuth, async (req, res) => {
+    try {
+      const regionsInput: Array<{ startSeconds: number; endSeconds: number; name?: string }> = req.body?.regions;
+      if (!Array.isArray(regionsInput) || regionsInput.length === 0) {
+        return res.status(400).json({ message: "regions deve ser um array com ao menos um elemento" });
+      }
+
+      const [takeRecord] = await db.select().from(takes).where(eq(takes.id, req.params.id));
+      if (!takeRecord) return res.status(404).json({ message: "Take nao encontrado" });
+
+      const userId    = (req.user as any)?.id;
+      const userRole  = (req.user as any)?.role;
+      const ADMIN_ROLES = ["platform_owner", "diretor", "director", "admin", "owner"];
+      const isAdmin   = ADMIN_ROLES.includes(userRole);
+      if (!isAdmin && takeRecord.voiceActorId !== userId) {
+        return res.status(403).json({ message: "Voce so pode editar seus proprios takes" });
+      }
+
+      const audioUrl      = (takeRecord as any).audioUrl || "";
+      const totalDuration = (takeRecord as any).durationSeconds ?? 0;
+      const origStartTime = (takeRecord as any).startTimeSeconds ?? 0;
+      if (!audioUrl) return res.status(400).json({ message: "Take nao tem audio" });
+
+      // Baixa o áudio original UMA vez
+      let audioBuffer: Buffer;
+      const supabaseParsed = parseSupabaseStorageUrl(audioUrl);
+      if (supabaseParsed && isSupabaseConfigured()) {
+        const downloaded = await downloadFromSupabaseStorageUrl(audioUrl);
+        audioBuffer = Buffer.from(await downloaded.arrayBuffer());
+      } else if (audioUrl.startsWith("/uploads/")) {
+        audioBuffer = fs.readFileSync(path.join(process.cwd(), "public", audioUrl));
+      } else {
+        return res.status(400).json({ message: "Audio nao suportado" });
+      }
+
+      const ext      = path.extname(audioUrl) || ".wav";
+      const newTakes: any[] = [];
+
+      for (const region of regionsInput) {
+        const startSec = Number(region.startSeconds);
+        const endSec   = Number(region.endSeconds);
+        // Ignora regiões inválidas ou muito curtas (< 100ms)
+        if (isNaN(startSec) || isNaN(endSec) || endSec <= startSec) continue;
+        const clampStart = Math.max(0, startSec);
+        const clampEnd   = Math.min(endSec, totalDuration);
+        if (clampEnd - clampStart < 0.1) continue;
+
+        const trimmedBuffer  = trimWavBuffer(audioBuffer, clampStart, clampEnd);
+        const regionDuration = clampEnd - clampStart;
+
+        // Salva segmento em novo arquivo
+        let segUrl: string;
+        if (supabaseParsed && isSupabaseConfigured()) {
+          const ts       = `${Date.now()}_${Math.random().toString(36).slice(2)}`;
+          const segPath  = supabaseParsed.path.replace(/(\.[^.]+)$/, `_seg_${ts}$1`);
+          segUrl = await uploadToSupabaseStorage({
+            bucket: supabaseParsed.bucket,
+            path:   segPath,
+            buffer: trimmedBuffer,
+            contentType: "audio/wav",
+          });
+        } else {
+          const segFilename = `take_seg_${Date.now()}_${Math.random().toString(36).slice(2)}${ext}`;
+          fs.writeFileSync(path.join(uploadsDir, segFilename), trimmedBuffer);
+          segUrl = `/uploads/${segFilename}`;
+        }
+
+        // Cria novo take com posição absoluta correta na timeline
+        const newTake = await storage.createTake(insertTakeSchema.parse({
+          sessionId:         takeRecord.sessionId,
+          characterId:       takeRecord.characterId,
+          voiceActorId:      takeRecord.voiceActorId,
+          lineIndex:         takeRecord.lineIndex,
+          audioUrl:          segUrl,
+          durationSeconds:   regionDuration,
+          startTimeSeconds:  origStartTime + clampStart,
+          status:            (takeRecord as any).status ?? "approved",
+          voiceActorName:    (takeRecord as any).voiceActorName ?? null,
+        }));
+        newTakes.push(newTake);
+      }
+
+      if (newTakes.length === 0) {
+        return res.status(400).json({ message: "Nenhuma regiao valida para processar" });
+      }
+
+      // Remove apenas o registro do take original (o arquivo de áudio fica como orphan)
+      await storage.deleteTake(takeRecord.id);
+
+      logger.info("[Take SilenceRemove] Done", { origId: takeRecord.id, newCount: newTakes.length });
+      res.status(200).json({ takes: newTakes });
+    } catch (err: any) {
+      logger.error("[Take SilenceRemove] Error", { message: err?.message, stack: err?.stack });
+      res.status(500).json({ message: err?.message || "Erro ao remover silencio" });
     }
   });
 

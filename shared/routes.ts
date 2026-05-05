@@ -47,6 +47,7 @@ const productionSchema = z.object({
   videoUrl: z.string().nullable(),
   scriptJson: z.string().nullable(),
   status: z.string(),
+  isPublic: z.boolean().nullable().optional(),
 });
 
 const characterSchema = z.object({
@@ -136,6 +137,7 @@ export const api = {
         videoUrl: z.string().optional(),
         scriptJson: z.string().optional(),
         status: z.string().optional(),
+        isPublic: z.boolean().optional(),
       }),
       responses: {
         201: productionSchema,
@@ -150,6 +152,7 @@ export const api = {
         videoUrl: z.string().optional(),
         scriptJson: z.string().optional(),
         status: z.string().optional(),
+        isPublic: z.boolean().optional(),
       }),
       responses: {
         200: productionSchema,

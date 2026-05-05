@@ -327,8 +327,11 @@ const StudioAdmin = memo(function StudioAdmin({ studioId }: { studioId: string }
     });
   }
 
-  const approvedMembers = members?.filter((m: any) => m.status === "approved") || [];
-  const activeProductions = productions || [];
+  const dedup = <T extends { id: string }>(arr: T[]): T[] =>
+    Array.from(new Map(arr.map(x => [x.id, x])).values());
+
+  const approvedMembers = dedup(members?.filter((m: any) => m.status === "approved") || []);
+  const activeProductions = dedup(productions || []);
 
   const filteredMembers = memberSearch.trim()
     ? approvedMembers.filter((m: any) =>
@@ -337,18 +340,18 @@ const StudioAdmin = memo(function StudioAdmin({ studioId }: { studioId: string }
       )
     : approvedMembers;
 
-  const filteredProductions = productionSearch.trim()
+  const filteredProductions = dedup(productionSearch.trim()
     ? (productions || []).filter((p: any) =>
         (p.name || "").toLowerCase().includes(productionSearch.toLowerCase()) ||
         (p.description || "").toLowerCase().includes(productionSearch.toLowerCase())
       )
-    : (productions || []);
+    : (productions || []));
 
-  const filteredSessions = sessionSearch.trim()
+  const filteredSessions = dedup(sessionSearch.trim()
     ? (sessions || []).filter((s: any) =>
         (s.title || "").toLowerCase().includes(sessionSearch.toLowerCase())
       )
-    : (sessions || []);
+    : (sessions || []));
 
   const tabs: { key: AdminTab; label: string; icon: typeof BarChart3; count?: number }[] = [
     { key: "overview", label: "Visao Geral", icon: BarChart3 },

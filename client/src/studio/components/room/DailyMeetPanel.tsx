@@ -49,17 +49,26 @@ export function DailyMeetPanel({ sessionId }: DailyMeetPanelProps) {
       role="region"
       aria-label="Chat de voz"
     >
-      <div className="flex items-center justify-between px-4 py-3">
+      <div
+        className="flex items-center justify-between px-4 py-3"
+        onClick={() => !isExpanded && setIsExpanded(true)}
+        style={{ cursor: isExpanded ? 'default' : 'pointer', userSelect: 'none' }}
+      >
         <div className="flex items-center gap-2">
           <Mic className="w-4 h-4 text-emerald-500" />
           <span className="text-sm font-medium text-foreground">Chat de Voz</span>
           {loading && (
             <span className="text-xs text-muted-foreground ml-2">Carregando...</span>
           )}
+          {!isExpanded && (
+            <span className="text-xs ml-1" style={{ color: 'hsl(var(--muted-foreground) / 0.5)' }}>
+              — toque para abrir
+            </span>
+          )}
         </div>
         
         <button
-          onClick={() => setIsExpanded(!isExpanded)}
+          onClick={(e) => { e.stopPropagation(); setIsExpanded(!isExpanded); }}
           className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs transition-colors hover:bg-white/5"
           style={{ color: 'hsl(var(--foreground) / 0.70)' }}
           data-testid="button-toggle-daily-expand"
