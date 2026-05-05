@@ -878,6 +878,7 @@ export default function RecordingRoom() {
   // Acumulador de perfis de dubladores conhecidos (cresce, nunca encolhe)
   const [knownVoiceActors, setKnownVoiceActors] = useState<Map<string, { voiceActorId: string; voiceActorName: string; characterName: string }>>(() => new Map());
   const [optimisticApproved, setOptimisticApproved] = useState<ApprovedTake[]>([]);
+  const [showAllTracks, setShowAllTracks] = useState(false);
 
 
   // Unified role checks via hook
@@ -2296,7 +2297,8 @@ export default function RecordingRoom() {
     const fromDB = (takesList as any[])
       .filter(t => {
         if (t.status !== "approved") return false;
-        if (textControllerUserIds.size === 0) return true;
+        if (showAllTracks) return true;
+        if (textControllerUserIds.size === 0) return false;
         return textControllerUserIds.has(t.voiceActorId);
       })
       .map(t => ({
@@ -2314,7 +2316,7 @@ export default function RecordingRoom() {
       .filter(t => !dbIds.has(t.id))
       .map(t => ({ ...t, durationSeconds: optimisticTrimDurations[t.id] ?? t.durationSeconds }));
     return [...fromDB, ...extraFromOptimistic];
-  }, [takesList, textControllerUserIds, optimisticApproved, optimisticTrimDurations]);
+  }, [takesList, textControllerUserIds, showAllTracks, optimisticApproved, optimisticTrimDurations]);
 
   // Perfis de dubladores conhecidos: acumulados via WS + aprovados em DB
   const voiceActorProfiles = useMemo(() => {
@@ -2365,18 +2367,17 @@ export default function RecordingRoom() {
       }
     }
     const all = Array.from(map.values());
-    // Mirror the same guard used by approvedTakes: when no permissions are set show
-    // everyone; when permissions are granted only show authorised actors' tracks.
-    // The pending-take actor (mid-recording) always bypasses the filter.
-    if (textControllerUserIds.size === 0) return all;
-    const pendingId  = pendingApprovalTake?.voiceActorId ?? "";
+    const pendingId    = pendingApprovalTake?.voiceActorId ?? "";
     const localActorId = (recordingProfile?.voiceActorName && user?.id) ? user.id : "";
+    if (showAllTracks) return all;
+    // When no permissions are set, show only local recording actor + pending-take actor.
+    // Full list only visible when director unlocks control or showAllTracks is toggled on.
     return all.filter(a =>
       textControllerUserIds.has(a.voiceActorId) ||
       (pendingId    && a.voiceActorId === pendingId) ||
       (localActorId && a.voiceActorId === localActorId)
     );
-  }, [knownVoiceActors, presenceUsers, approvedTakes, pendingApprovalTake, textControllerUserIds, recordingProfile, user?.id]);
+  }, [knownVoiceActors, presenceUsers, approvedTakes, pendingApprovalTake, textControllerUserIds, showAllTracks, recordingProfile, user?.id]);
 
   const handleSamplesEdited = useCallback((samples: Float32Array) => {
     setLastRecording((prev) => prev ? { ...prev, samples } : null);
@@ -3948,6 +3949,8 @@ export default function RecordingRoom() {
           takeCacheBust={takeCacheBust}
           calculateEndLine={calculateEndLine}
           onDownloadTake={handleDownloadTake}
+          showAllTracks={showAllTracks}
+          onToggleShowAllTracks={() => setShowAllTracks(v => !v)}
         />
           </div>
         </>

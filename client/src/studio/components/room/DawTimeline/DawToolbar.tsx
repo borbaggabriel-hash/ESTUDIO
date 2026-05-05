@@ -1,5 +1,5 @@
 import type React from "react";
-import { MousePointer2, Scissors, Play, Square, ZoomIn, ZoomOut, Trash2, Check, X, Repeat2, ChevronDown, ChevronUp } from "lucide-react";
+import { MousePointer2, Scissors, Play, Square, ZoomIn, ZoomOut, Trash2, Check, X, Repeat2, ChevronDown, ChevronUp, Layers } from "lucide-react";
 import type { DawTool } from "./types";
 
 interface DawToolbarProps {
@@ -28,6 +28,8 @@ interface DawToolbarProps {
   onLoopClear: () => void;
   showPreview: boolean;
   isProcessingSilence?: boolean;
+  showAllTracks?: boolean;
+  onToggleShowAllTracks?: () => void;
 }
 
 // ── Estilos base ─────────────────────────────────────────────────────────────
@@ -82,6 +84,7 @@ export function DawToolbar({
   isRecording,
   timelineCollapsed = false, onToggleTimeline,
   loopActive, loopPhase, onLoopClear, showPreview, isProcessingSilence = false,
+  showAllTracks = false, onToggleShowAllTracks,
 }: DawToolbarProps) {
   return (
     <div style={{
@@ -146,6 +149,15 @@ export function DawToolbar({
       >
         <Repeat2 size={13} />
       </button>
+      {onToggleShowAllTracks && (
+        <button
+          onClick={onToggleShowAllTracks}
+          style={toolBtn(showAllTracks, "blue")}
+          title={showAllTracks ? "Exibir só tracks desbloqueadas" : "Exibir todas as tracks"}
+        >
+          <Layers size={13} />
+        </button>
+      )}
 
       <div style={SEP} />
 

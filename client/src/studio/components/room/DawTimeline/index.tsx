@@ -87,6 +87,8 @@ export interface DawTimelineProps {
   calculateEndLine?: (lineIndex: number, durationSeconds: number) => number;
   onDownloadTake?: (take: any) => void;
   onTakeSilenceRemove?: (takeId: string, regions: Array<{ start: number; end: number; name: string }>) => void;
+  showAllTracks?: boolean;
+  onToggleShowAllTracks?: () => void;
 }
 
 // Re-exporta tipos para uso em room.tsx
@@ -160,6 +162,7 @@ export function DawTimeline({
   videoRef,
   takesList = [], isDirectorOrPrivileged = false, userId,
   takeCacheBust, calculateEndLine, onDownloadTake,
+  showAllTracks = false, onToggleShowAllTracks,
 }: DawTimelineProps) {
 
   const daw = useDawTimeline();
@@ -704,6 +707,8 @@ export function DawTimeline({
           isRecording={isRecording}
           timelineCollapsed={timelineCollapsed}
           onToggleTimeline={() => setTimelineCollapsed(c => !c)}
+          showAllTracks={showAllTracks}
+          onToggleShowAllTracks={onToggleShowAllTracks}
         />
 
         {/* ── Corpo (headers + ruler + clips) ── */}
