@@ -15,6 +15,7 @@ import {
   AlertCircle,
 } from "lucide-react";
 import { TakeWaveformEditor } from "@studio/components/audio/TakeWaveformEditor";
+import { useIsMobile } from "@studio/hooks/use-mobile";
 
 // ── Types ──────────────────────────────────────────────────────────────────────
 
@@ -111,6 +112,7 @@ export const DirectorControlPip = memo(function DirectorControlPip({
   onToggleTextControl,
   onRevokeAllTextControl,
 }: DirectorControlPipProps) {
+  const isMobile = useIsMobile();
   // ── Panel drag, size & position ───────────────────────────────────────────
   const panelRef = useRef<HTMLDivElement>(null);
   const posRef = useRef({ x: 0, y: 80 });
@@ -139,12 +141,18 @@ export const DirectorControlPip = memo(function DirectorControlPip({
   }, []);
 
   useEffect(() => {
-    posRef.current = { x: Math.max(20, window.innerWidth - 404), y: 80 };
+    if (isMobile) {
+      posRef.current = { x: 0, y: 0 };
+      sizeRef.current = { w: window.innerWidth, h: 0 };
+    } else {
+      posRef.current = { x: Math.max(20, window.innerWidth - 404), y: 80 };
+    }
     applyTransform();
-  }, [applyTransform]);
+  }, [applyTransform, isMobile]);
 
   const onDragDown = useCallback(
     (e: React.PointerEvent) => {
+      if (isMobile) return; // Disable drag on mobile
       e.currentTarget.setPointerCapture(e.pointerId);
       dragRef.current = {
         startX: e.clientX,
@@ -153,7 +161,7 @@ export const DirectorControlPip = memo(function DirectorControlPip({
         origY: posRef.current.y,
       };
     },
-    []
+    [isMobile]
   );
   const onDragMove = useCallback(
     (e: React.PointerEvent) => {
@@ -169,6 +177,7 @@ export const DirectorControlPip = memo(function DirectorControlPip({
   const onDragUp = useCallback(() => { dragRef.current = null; }, []);
 
   const onResizeDown = useCallback((e: React.PointerEvent) => {
+    if (isMobile) return; // Disable resize on mobile
     e.stopPropagation();
     e.currentTarget.setPointerCapture(e.pointerId);
     const h = panelRef.current?.offsetHeight ?? sizeRef.current.h;
@@ -179,7 +188,7 @@ export const DirectorControlPip = memo(function DirectorControlPip({
       origH: h,
     };
     sizeRef.current.h = h; // freeze height so resize works from current rendered height
-  }, []);
+  }, [isMobile]);
   const onResizeMove = useCallback((e: React.PointerEvent) => {
     if (!resizeRef.current) return;
     sizeRef.current = {
@@ -356,14 +365,21 @@ export const DirectorControlPip = memo(function DirectorControlPip({
       style={{
         position: "fixed",
         zIndex: 9999,
-        width: 384,      // overridden by applyTransform
-        borderRadius: 14,
+        width: isMobile ? "100%" : 384,      // full width on mobile
+        maxWidth: isMobile ? "100%" : 384,
+        left: isMobile ? 0 : undefined,      // center on mobile
+        right: isMobile ? 0 : undefined,
+        margin: isMobile ? "0 auto" : undefined,
+        top: isMobile ? 0 : undefined,
+        borderRadius: isMobile ? 0 : 14,      // no radius on mobile
         overflow: "hidden",
-        minWidth: 320,
+        minWidth: isMobile ? "100%" : 320,
         minHeight: 120,
         background: BG,
         boxShadow:
-          "0 12px 48px rgba(0,0,0,0.75), 0 0 0 1px rgba(255,255,255,0.08)",
+          isMobile
+            ? "0 -4px 24px rgba(0,0,0,0.5), 0 0 0 1px rgba(255,255,255,0.08)"
+            : "0 12px 48px rgba(0,0,0,0.75), 0 0 0 1px rgba(255,255,255,0.08)",
         border: `1px solid ${tabAccent}33`,
         display: "flex",
         flexDirection: "column",
@@ -371,24 +387,25 @@ export const DirectorControlPip = memo(function DirectorControlPip({
         transition: "border-color .25s",
       }}
     >
-      {/* ── Drag handle ─────────────────────────────────────────────────────── */}
-      <div
-        style={{
-          height: 40,
-          display: "flex",
-          alignItems: "center",
-          justifyContent: "space-between",
-          padding: "0 12px",
-          background: `${tabAccent}0d`,
-          borderBottom: `1px solid ${tabAccent}22`,
-          cursor: "grab",
-          userSelect: "none",
-          flexShrink: 0,
-        }}
-        onPointerDown={onDragDown}
-        onPointerMove={onDragMove}
-        onPointerUp={onDragUp}
-      >
+      {/* ── Drag handle (desktop only) ─────────────────────────────────────────── */}
+      {!isMobile && (
+        <div
+          style={{
+            height: 40,
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "space-between",
+            padding: "0 12px",
+            background: `${tabAccent}0d`,
+            borderBottom: `1px solid ${tabAccent}22`,
+            cursor: "grab",
+            userSelect: "none",
+            flexShrink: 0,
+          }}
+          onPointerDown={onDragDown}
+          onPointerMove={onDragMove}
+          onPointerUp={onDragUp}
+        >
         <div style={{ display: "flex", alignItems: "center", gap: 7 }}>
           <GripHorizontal
             style={{ width: 13, height: 13, color: `${tabAccent}66` }}
@@ -451,6 +468,64 @@ export const DirectorControlPip = memo(function DirectorControlPip({
           )}
         </div>
       </div>
+      )}
+
+      {/* ── Mobile header (status + close only, no drag) ─────────────────────── */}
+      {isMobile && (
+        <div
+          style={{
+            height: 40,
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "space-between",
+            padding: "0 12px",
+            background: `${tabAccent}0d`,
+            borderBottom: `1px solid ${tabAccent}22`,
+            flexShrink: 0,
+          }}
+        >
+          <div style={{ display: "flex", alignItems: "center", gap: 7 }}>
+            <div
+              style={{
+                width: 6,
+                height: 6,
+                borderRadius: "50%",
+                background: tabAccent,
+                boxShadow: `0 0 6px ${tabAccent}`,
+                animation:
+                  (pendingTake && isDirector) || isWaiting
+                    ? "dtl-rec-dot .9s ease-in-out infinite"
+                    : "none",
+                flexShrink: 0,
+              }}
+            />
+            <span
+              style={{
+                fontSize: 10,
+                fontWeight: 700,
+                letterSpacing: "0.1em",
+                textTransform: "uppercase",
+                color: tabAccent,
+              }}
+            >
+              {pendingTake && isDirector
+                ? "Revisão de Take"
+                : approvalStatus === "approved"
+                ? "Take Aprovado"
+                : approvalStatus === "rejected"
+                ? "Take Rejeitado"
+                : isWaiting
+                ? "Aguardando Aprovação"
+                : "Studio Control"}
+            </span>
+          </div>
+          {(!pendingTake || !isDirector) && (
+            <button onClick={onDismiss} style={iconBtn()}>
+              <X style={{ width: 11, height: 11 }} />
+            </button>
+          )}
+        </div>
+      )}
 
       {/* ── Tab bar (directors only, when not minimized) ─────────────────────── */}
       {!isMinimized && isDirector && (
@@ -1382,21 +1457,22 @@ export const DirectorControlPip = memo(function DirectorControlPip({
         </div>
       )}
 
-      {/* ── Resize handle (nwse-resize, bottom-right corner) ── */}
-      <div
-        style={{
-          position: "absolute",
-          bottom: 0,
-          right: 0,
-          width: 20,
-          height: 20,
-          cursor: "nwse-resize",
-          zIndex: 10,
-        }}
-        onPointerDown={onResizeDown}
-        onPointerMove={onResizeMove}
-        onPointerUp={onResizeUp}
-      >
+      {/* ── Resize handle (nwse-resize, bottom-right corner, desktop only) ── */}
+      {!isMobile && (
+        <div
+          style={{
+            position: "absolute",
+            bottom: 0,
+            right: 0,
+            width: 20,
+            height: 20,
+            cursor: "nwse-resize",
+            zIndex: 10,
+          }}
+          onPointerDown={onResizeDown}
+          onPointerMove={onResizeMove}
+          onPointerUp={onResizeUp}
+        >
         <svg
           width="12"
           height="12"
@@ -1411,6 +1487,7 @@ export const DirectorControlPip = memo(function DirectorControlPip({
           />
         </svg>
       </div>
+      )}
     </div>,
     document.body
   );
