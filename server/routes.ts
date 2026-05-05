@@ -576,6 +576,48 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     }
   });
 
+  // MEMBERS - CREATE USER & ENROLL
+  app.post("/api/studios/:studioId/members/create-user", requireAuth, requireStudioRole("studio_admin"), async (req, res) => {
+    try {
+      const { fullName, email, password, phone, roles } = z.object({
+        fullName: z.string().min(2),
+        email: z.string().email(),
+        password: z.string().min(6),
+        phone: z.string().optional(),
+        roles: z.array(z.enum(["studio_admin", "diretor", "dublador"])).min(1),
+      }).parse(req.body);
+
+      const { hashPassword } = await import("./replit_integrations/auth/replitAuth");
+      const { authStorage } = await import("./replit_integrations/auth/storage");
+
+      const existing = await authStorage.getUserByEmail(email);
+      if (existing) return res.status(409).json({ message: "Email ja em uso" });
+
+      const newUser = await authStorage.createUser({
+        email: email.toLowerCase().trim(),
+        passwordHash: hashPassword(password),
+        fullName,
+        displayName: fullName,
+        phone: phone || null,
+        role: "dublador",
+        status: "approved",
+      });
+
+      const membership = await storage.createMembership({
+        userId: newUser.id,
+        studioId: req.params.studioId,
+        role: roles[0],
+        status: "approved",
+      });
+
+      await storage.setUserStudioRoles(membership.id, roles);
+
+      res.status(201).json({ user: { id: newUser.id, email: newUser.email, fullName: newUser.fullName }, membership });
+    } catch (err: any) {
+      res.status(400).json({ message: err.message || "Erro ao criar usuario" });
+    }
+  });
+
   // MEMBERS - REMOVE
   app.delete("/api/studios/:studioId/members/:membershipId", requireAuth, requireStudioRole("studio_admin"), async (req, res) => {
     try {

@@ -58,6 +58,9 @@ const StudioAdmin = memo(function StudioAdmin({ studioId }: { studioId: string }
   const [removeMemberConfirm, setRemoveMemberConfirm] = useState<any | null>(null);
   const [rejectConfirm, setRejectConfirm] = useState<any | null>(null);
 
+  const [createUserOpen, setCreateUserOpen] = useState(false);
+  const [newUserForm, setNewUserForm] = useState({ fullName: "", email: "", password: "", phone: "", roles: ["dublador"] as string[] });
+
   const [memberSearch, setMemberSearch] = useState("");
   const [productionSearch, setProductionSearch] = useState("");
   const [sessionSearch, setSessionSearch] = useState("");
@@ -161,6 +164,26 @@ const StudioAdmin = memo(function StudioAdmin({ studioId }: { studioId: string }
     },
     onError: (err: any) => {
       toast({ title: "Erro ao rejeitar membro", description: err?.message, variant: "destructive" });
+    },
+  });
+
+  const createUserMutation = useMutation({
+    mutationFn: async (data: { fullName: string; email: string; password: string; phone: string; roles: string[] }) => {
+      return authFetch(`/api/studios/${studioId}/members/create-user`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(data),
+      });
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/studios", studioId, "members"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/studios", studioId, "stats"] });
+      setCreateUserOpen(false);
+      setNewUserForm({ fullName: "", email: "", password: "", phone: "", roles: ["dublador"] });
+      toast({ title: "Membro criado com sucesso" });
+    },
+    onError: (err: any) => {
+      toast({ title: "Erro ao criar membro", description: err?.message, variant: "destructive" });
     },
   });
 
@@ -538,6 +561,12 @@ const StudioAdmin = memo(function StudioAdmin({ studioId }: { studioId: string }
                 <Users className="w-4 h-4 text-emerald-500" />
                 <h3 className="text-sm font-semibold text-foreground">Membros Ativos</h3>
                 <Badge variant="secondary">{approvedMembers.length}</Badge>
+                {canManageMembers && (
+                  <Button size="sm" className="ml-auto gap-1.5" onClick={() => setCreateUserOpen(true)} data-testid="button-create-user">
+                    <UserPlus className="w-3.5 h-3.5" />
+                    Novo Membro
+                  </Button>
+                )}
               </div>
               <Input
                 placeholder="Buscar membro..."
@@ -1131,6 +1160,95 @@ const StudioAdmin = memo(function StudioAdmin({ studioId }: { studioId: string }
               data-testid="button-create-session"
             >
               {createSessionMutation.isPending ? "Criando..." : "Criar"}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      <Dialog open={createUserOpen} onOpenChange={v => { if (!v) { setCreateUserOpen(false); setNewUserForm({ fullName: "", email: "", password: "", phone: "", roles: ["dublador"] }); } }}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Novo Membro</DialogTitle>
+            <DialogDescription>Crie um usuario e adicione-o diretamente ao estudio.</DialogDescription>
+          </DialogHeader>
+          <div className="space-y-4 py-2">
+            <div className="vhub-field">
+              <label className="vhub-field-label">Nome completo *</label>
+              <Input
+                value={newUserForm.fullName}
+                onChange={e => setNewUserForm(f => ({ ...f, fullName: e.target.value }))}
+                placeholder="Nome do membro"
+                data-testid="input-new-user-fullname"
+              />
+            </div>
+            <div className="vhub-field">
+              <label className="vhub-field-label">Email *</label>
+              <Input
+                type="email"
+                value={newUserForm.email}
+                onChange={e => setNewUserForm(f => ({ ...f, email: e.target.value }))}
+                placeholder="email@exemplo.com"
+                data-testid="input-new-user-email"
+              />
+            </div>
+            <div className="vhub-field">
+              <label className="vhub-field-label">Senha * (minimo 6 caracteres)</label>
+              <Input
+                type="password"
+                value={newUserForm.password}
+                onChange={e => setNewUserForm(f => ({ ...f, password: e.target.value }))}
+                placeholder="Senha de acesso"
+                data-testid="input-new-user-password"
+              />
+            </div>
+            <div className="vhub-field">
+              <label className="vhub-field-label">Telefone</label>
+              <Input
+                type="tel"
+                value={newUserForm.phone}
+                onChange={e => setNewUserForm(f => ({ ...f, phone: e.target.value }))}
+                placeholder="(00) 00000-0000"
+                data-testid="input-new-user-phone"
+              />
+            </div>
+            <div className="vhub-field">
+              <label className="vhub-field-label">Papel no estudio *</label>
+              <div className="flex flex-wrap gap-3 mt-1">
+                {STUDIO_ROLES.map(r => (
+                  <label key={r.value} className="flex items-center gap-2 cursor-pointer">
+                    <Checkbox
+                      checked={newUserForm.roles.includes(r.value)}
+                      onCheckedChange={() => {
+                        setNewUserForm(f => {
+                          const has = f.roles.includes(r.value);
+                          const updated = has ? f.roles.filter(x => x !== r.value) : [...f.roles, r.value];
+                          return { ...f, roles: updated.length === 0 ? [r.value] : updated };
+                        });
+                      }}
+                      data-testid={`check-new-user-role-${r.value}`}
+                    />
+                    <Label className="cursor-pointer font-normal">{r.label}</Label>
+                  </label>
+                ))}
+              </div>
+            </div>
+          </div>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => { setCreateUserOpen(false); setNewUserForm({ fullName: "", email: "", password: "", phone: "", roles: ["dublador"] }); }}>
+              Cancelar
+            </Button>
+            <Button
+              disabled={
+                !newUserForm.fullName.trim() ||
+                !newUserForm.email.trim() ||
+                newUserForm.password.length < 6 ||
+                newUserForm.roles.length === 0 ||
+                createUserMutation.isPending
+              }
+              onClick={() => createUserMutation.mutate(newUserForm)}
+              data-testid="button-confirm-create-user"
+            >
+              {createUserMutation.isPending ? "Criando..." : "Criar Membro"}
             </Button>
           </DialogFooter>
         </DialogContent>
