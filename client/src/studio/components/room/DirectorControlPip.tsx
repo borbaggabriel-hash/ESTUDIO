@@ -222,6 +222,13 @@ export const DirectorControlPip = memo(function DirectorControlPip({
     }
   }, [pendingTake?.takeId]);
 
+  // Auto-expand when director approves/rejects (for dublador)
+  useEffect(() => {
+    if (!isDirector && (approvalStatus === "approved" || approvalStatus === "rejected")) {
+      setIsMinimized(false);
+    }
+  }, [approvalStatus, isDirector]);
+
   const togglePlay = useCallback(() => {
     if (!pendingTake) return;
     if (!audioRef.current) {
@@ -425,17 +432,19 @@ export const DirectorControlPip = memo(function DirectorControlPip({
           style={{ display: "flex", alignItems: "center", gap: 4 }}
           onPointerDown={(e) => e.stopPropagation()}
         >
-          <button
-            onClick={() => setIsMinimized((m) => !m)}
-            style={iconBtn()}
-          >
-            {isMinimized ? (
-              <ChevronDown style={{ width: 11, height: 11 }} />
-            ) : (
-              <ChevronUp style={{ width: 11, height: 11 }} />
-            )}
-          </button>
-          {!pendingTake && (
+          {isDirector && (
+            <button
+              onClick={() => setIsMinimized((m) => !m)}
+              style={iconBtn()}
+            >
+              {isMinimized ? (
+                <ChevronDown style={{ width: 11, height: 11 }} />
+              ) : (
+                <ChevronUp style={{ width: 11, height: 11 }} />
+              )}
+            </button>
+          )}
+          {(!pendingTake || !isDirector) && (
             <button onClick={onDismiss} style={iconBtn()}>
               <X style={{ width: 11, height: 11 }} />
             </button>
