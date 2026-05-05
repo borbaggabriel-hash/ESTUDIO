@@ -1211,7 +1211,7 @@ export default function RecordingRoom() {
           if (msg.type === "take:approved") {
             queryClient.invalidateQueries({ queryKey: ["/api/sessions", sessionId, "takes"] });
             if (msg.voiceActorId === user?.id && !isDirector) {
-              // Update voice actor's popup to show approval
+              setPendingApprovalTake(null);
               setApprovalStatus('approved');
               setDirectorFeedback(msg.feedback || '');
             }
@@ -1221,7 +1221,7 @@ export default function RecordingRoom() {
           if (msg.type === "take:rejected") {
             queryClient.invalidateQueries({ queryKey: ["/api/sessions", sessionId, "takes"] });
             if (msg.voiceActorId === user?.id && !isDirector) {
-              // Update voice actor's popup to show rejection
+              setPendingApprovalTake(null);
               setApprovalStatus('rejected');
               setDirectorFeedback(msg.feedback || '');
             }
