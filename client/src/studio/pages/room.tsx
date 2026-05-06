@@ -506,7 +506,7 @@ export default function RecordingRoom() {
 
   const [isLandscapeMobile, setIsLandscapeMobile] = useState<boolean>(() => {
     if (typeof window === 'undefined') return false;
-    return window.innerWidth > window.innerHeight && window.innerHeight < 500;
+    return window.matchMedia('(orientation: landscape)').matches && window.innerHeight < 500;
   });
   const isLandscapeMobileRef = useRef(false);
 
@@ -1581,7 +1581,7 @@ export default function RecordingRoom() {
   useEffect(() => {
     const check = () => {
       setIsMobile(window.innerWidth < 640);
-      const ls = window.innerWidth > window.innerHeight && window.innerHeight < 500;
+      const ls = window.matchMedia('(orientation: landscape)').matches && window.innerHeight < 500;
       setIsLandscapeMobile(ls);
       isLandscapeMobileRef.current = ls;
     };
@@ -1593,7 +1593,7 @@ export default function RecordingRoom() {
       setMobileVideoH(20);
       try { localStorage.removeItem('daw-mobile-video-height'); } catch {}
       setTimeout(() => {
-        const ls = window.innerWidth > window.innerHeight && window.innerHeight < 500;
+        const ls = window.matchMedia('(orientation: landscape)').matches && window.innerHeight < 500;
         setIsLandscapeMobile(ls);
         isLandscapeMobileRef.current = ls;
       }, 150);
