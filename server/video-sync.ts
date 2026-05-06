@@ -1,7 +1,7 @@
 import { WebSocketServer, WebSocket } from "ws";
 import type { Server } from "http";
 import { pool } from "./db";
-import { isPrivilegedStudioRole, normalizePlatformRole, normalizeStudioRole } from "@shared/roles";
+import { isPrivilegedStudioRole, normalizePlatformRole, normalizeStudioRole, getHighestStudioRole } from "@shared/roles";
 import { logger } from "./lib/logger";
 
 interface SyncMessage {
@@ -152,12 +152,34 @@ async function getWsIdentity(sessionId: string, req: any, queryUserId?: string |
   const platformRole = normalizePlatformRole(userRow.role);
   const name = String(userRow.display_name || userRow.full_name || userRow.email || "Usuario");
 
-  // ANY authenticated user can connect - no role checks needed
-  // Use the actual normalized platform role so isPrivilegedStudioRole works correctly
-  const studioRole = platformRole;
-  
-  logger.info('[WebSocket Auth] Authenticated', { name, studioRole });
-  return { userId, role: studioRole, name, platformRole };
+  // Resolve effective role: platform_owner always wins; otherwise check studio membership roles
+  let resolvedRole = platformRole;
+  if (platformRole !== "platform_owner") {
+    try {
+      const sessionRes = await pool.query(
+        "SELECT studio_id FROM recording_sessions WHERE id = $1 LIMIT 1",
+        [sessionId]
+      );
+      const studioId = sessionRes.rows?.[0]?.studio_id;
+      if (studioId) {
+        const rolesRes = await pool.query(
+          `SELECT usr.role FROM user_studio_roles usr
+           JOIN studio_memberships sm ON sm.id = usr.membership_id
+           WHERE sm.user_id = $1 AND sm.studio_id = $2 AND sm.status = 'approved'`,
+          [userId, studioId]
+        );
+        const studioRoles = (rolesRes.rows as Array<{ role: string }>).map(r => normalizeStudioRole(r.role));
+        if (studioRoles.length > 0) {
+          resolvedRole = getHighestStudioRole(studioRoles);
+        }
+      }
+    } catch (err) {
+      logger.warn('[WebSocket Auth] Could not resolve studio role, falling back to platform role', { userId, error: String(err) });
+    }
+  }
+
+  logger.info('[WebSocket Auth] Authenticated', { name, resolvedRole });
+  return { userId, role: resolvedRole, name, platformRole };
 }
 
 export function setupVideoSync(httpServer: Server) {

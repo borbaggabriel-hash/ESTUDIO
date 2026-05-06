@@ -1,5 +1,6 @@
 import { useMemo } from "react";
 import { DIRECTOR_ROLES, PRIVILEGED_PLATFORM_ROLES } from "../pages/room.constants";
+import { isPrivilegedStudioRole } from "@shared/roles";
 
 interface Session {
   participants?: Array<{
@@ -16,6 +17,8 @@ interface User {
 interface UseUserRoleParams {
   user: User | null | undefined;
   session: Session | null | undefined;
+  /** Resolved studio-specific role from /api/studios/:studioId/my-role */
+  studioRole?: string | null;
 }
 
 interface UseUserRoleResult {
@@ -38,6 +41,7 @@ interface UseUserRoleResult {
 export function useUserRole({
   user,
   session,
+  studioRole,
 }: UseUserRoleParams): UseUserRoleResult {
   const sessionRole = useMemo(() => {
     const role = session?.participants?.find((p) => p.userId === user?.id)?.role;
@@ -53,16 +57,21 @@ export function useUserRole({
     // Director (diretor) has full studio control
     if (PRIVILEGED_PLATFORM_ROLES.includes(userPlatformRole as any)) return true;
     
+    // Check studio membership role (from /my-role endpoint)
+    if (studioRole && isPrivilegedStudioRole(studioRole)) return true;
+    
     // Check session participant role for director
     return DIRECTOR_ROLES.includes(sessionRole as any);
-  }, [user?.role, sessionRole]);
+  }, [user?.role, sessionRole, studioRole]);
 
   const isDirector = useMemo(() => {
     if (user?.role === "platform_owner") return true;
     if (user?.role === "studio_admin") return true;
     if (user?.role === "diretor") return true;
+    // Check studio membership role (from /my-role endpoint)
+    if (studioRole && isPrivilegedStudioRole(studioRole)) return true;
     return sessionRole === "diretor" || sessionRole === "studio_admin";
-  }, [sessionRole, user?.role]);
+  }, [sessionRole, user?.role, studioRole]);
 
   const canControl = useMemo(() => {
     // Privileged users can always control

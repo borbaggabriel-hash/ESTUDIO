@@ -800,7 +800,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     res.status(200).json(session);
   });
 
-  app.post("/api/studios/:studioId/sessions", requireAuth, requireStudioRole("studio_admin"), async (req, res) => {
+  app.post("/api/studios/:studioId/sessions", requireAuth, requireStudioRole("studio_admin", "diretor"), async (req, res) => {
     try {
       const userId = (req.user as any)?.id;
       const settings = await storage.getAllSettings();
@@ -845,7 +845,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     }
   });
 
-  app.delete("/api/studios/:studioId/sessions/:id", requireAuth, requireStudioRole("studio_admin"), async (req, res) => {
+  app.delete("/api/studios/:studioId/sessions/:id", requireAuth, requireStudioRole("studio_admin", "diretor"), async (req, res) => {
     try {
       const session = await storage.getSession(req.params.id);
       if (!session || session.studioId !== req.params.studioId) return res.status(404).json({ message: "Sessao nao encontrada" });
@@ -853,7 +853,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       const userRole = (req.user as any)?.role;
       const studioRole = (req as any).studioRole;
       const normalizedUserRole = normalizePlatformRole(userRole);
-      const isAdmin = normalizedUserRole === "platform_owner" || normalizedUserRole === "diretor" || studioRole === "studio_admin";
+      const isAdmin = normalizedUserRole === "platform_owner" || normalizedUserRole === "diretor" || studioRole === "studio_admin" || studioRole === "diretor";
       if (!isAdmin && session.createdBy !== userId) {
         return res.status(403).json({ message: "Voce so pode excluir sessoes criadas por voce" });
       }
@@ -864,7 +864,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     }
   });
 
-  app.patch("/api/studios/:studioId/sessions/:id", requireAuth, requireStudioRole("studio_admin"), async (req, res) => {
+  app.patch("/api/studios/:studioId/sessions/:id", requireAuth, requireStudioRole("studio_admin", "diretor"), async (req, res) => {
     try {
       const session = await storage.getSession(req.params.id);
       if (!session || session.studioId !== req.params.studioId) return res.status(404).json({ message: "Sessao nao encontrada" });
@@ -1071,7 +1071,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
 
       const userId = (req.user as any)?.id;
       const userRole = (req.user as any)?.role;
-      const isAdmin = userRole === "platform_owner" || userRole === "diretor";
+      const isAdmin = await checkTakeAdminAccess(userId, userRole, takeRecord.sessionId);
       if (!isAdmin && takeRecord.voiceActorId !== userId) {
         return res.status(403).json({ message: "Voce so pode editar seus proprios takes" });
       }
@@ -1147,18 +1147,14 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
 
       const userId = (req.user as any)?.id;
       const userRole = (req.user as any)?.role;
-      const ADMIN_ROLES = ["platform_owner", "diretor", "director", "admin", "owner"];
-      const isAdmin = ADMIN_ROLES.includes(userRole);
+      const isAdmin = await checkTakeAdminAccess(userId, userRole, takeRecord.sessionId);
       if (!isAdmin && takeRecord.voiceActorId !== userId) {
         return res.status(403).json({ message: "Voce so pode editar seus proprios takes" });
       }
 
       const audioUrl = (takeRecord as any).audioUrl || "";
+      const totalDuration = (takeRecord as any).durationSeconds ?? 0;
       if (!audioUrl) return res.status(400).json({ message: "Take nao tem audio" });
-      const totalDuration = (takeRecord as any).durationSeconds || 0;
-      if (splitAtSeconds >= totalDuration) {
-        return res.status(400).json({ message: "splitAtSeconds deve ser menor que a duracao do take" });
-      }
 
       // Download audio
       let audioBuffer: Buffer;
@@ -1238,8 +1234,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
 
       const userId    = (req.user as any)?.id;
       const userRole  = (req.user as any)?.role;
-      const ADMIN_ROLES = ["platform_owner", "diretor", "director", "admin", "owner"];
-      const isAdmin   = ADMIN_ROLES.includes(userRole);
+      const isAdmin   = await checkTakeAdminAccess(userId, userRole, takeRecord.sessionId);
       if (!isAdmin && takeRecord.voiceActorId !== userId) {
         return res.status(403).json({ message: "Voce so pode editar seus proprios takes" });
       }
@@ -1329,7 +1324,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       if (!takeRecord) return res.status(404).json({ message: "Take nao encontrado" });
       const userId = (req.user as any)?.id;
       const userRole = (req.user as any)?.role;
-      const isAdmin = userRole === "platform_owner" || userRole === "diretor";
+      const isAdmin = await checkTakeAdminAccess(userId, userRole, takeRecord.sessionId);
       if (!isAdmin && takeRecord.voiceActorId !== userId) {
         return res.status(403).json({ message: "Voce so pode excluir seus proprios takes" });
       }
@@ -1360,6 +1355,17 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       res.status(500).json({ message: "Erro ao excluir take" });
     }
   });
+
+  // TAKES - DIRECTOR CHECK HELPER
+  // Checks platform role first, then falls back to studio membership roles
+  async function checkTakeAdminAccess(userId: string, userRole: string, sessionId: string): Promise<boolean> {
+    const privileged = ["platform_owner", "diretor", "director", "studio_admin"];
+    if (privileged.includes(userRole)) return true;
+    const session = await storage.getSession(sessionId);
+    if (!session) return false;
+    const studioRoles = await storage.getUserRolesInStudio(userId, session.studioId);
+    return studioRoles.some(r => privileged.includes(r.toLowerCase()));
+  }
 
   // TAKES - SHARED REVIEW HELPER
   async function reviewTake(

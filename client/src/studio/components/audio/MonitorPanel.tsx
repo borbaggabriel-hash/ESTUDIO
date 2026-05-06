@@ -16,6 +16,7 @@ interface MonitorPanelProps {
   lastRecording: RecordingResult | null;
   previewAudioRef: React.MutableRefObject<HTMLAudioElement | null>;
   savedSamples?: Float32Array | null;
+  compact?: boolean;
 }
 
 function scaleCanvas(
@@ -38,6 +39,7 @@ export default function MonitorPanel({
   lastRecording,
   previewAudioRef,
   savedSamples,
+  compact,
 }: MonitorPanelProps) {
   const waveCanvasRef = useRef<HTMLCanvasElement>(null);
   const vuCanvasRef = useRef<HTMLCanvasElement>(null);
@@ -186,17 +188,17 @@ export default function MonitorPanel({
   }, [micState, recordingStatus, lastRecording, savedSamples]);
 
   return (
-    <div className="flex items-center gap-1.5 h-full rounded-lg p-1 bg-neutral-900 border border-white/15 shadow-inner">
+    <div className={compact ? "flex items-center h-full w-full" : "flex items-center gap-1.5 h-full rounded-lg p-1 bg-neutral-900 border border-white/15 shadow-inner"}>
       <canvas
         ref={waveCanvasRef}
-        className="flex-1 h-12 rounded opacity-90"
+        className={compact ? "flex-1 h-full rounded opacity-80" : "flex-1 h-12 rounded opacity-90"}
         style={{ imageRendering: "pixelated" }}
         data-testid="canvas-waveform"
       />
       <canvas
         ref={vuCanvasRef}
         className="w-4 h-12 rounded-sm flex-shrink-0"
-        style={{ imageRendering: "pixelated" }}
+        style={{ imageRendering: "pixelated", display: compact ? "none" : undefined }}
         data-testid="canvas-vu-meter"
       />
     </div>

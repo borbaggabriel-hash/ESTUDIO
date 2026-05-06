@@ -251,6 +251,24 @@ function useSessionData(studioId: string, sessionId: string) {
   });
 }
 
+function useMyStudioRole(studioId: string) {
+  return useQuery<{ role: string | null; roles: string[] }>({
+    queryKey: ["/api/studios", studioId, "my-role"],
+    queryFn: () => authFetch(`/api/studios/${studioId}/my-role`),
+    enabled: !!studioId,
+    staleTime: 60_000,
+  });
+}
+
+function useStudioMembers(studioId: string) {
+  return useQuery<Array<{ userId: string; role: string }>>({
+    queryKey: ["/api/studios", studioId, "members"],
+    queryFn: () => authFetch(`/api/studios/${studioId}/members`),
+    enabled: !!studioId,
+    staleTime: 60_000,
+  });
+}
+
 function useProductionScript(studioId: string, productionId?: string) {
   return useQuery({
     queryKey: ["/api/studios", studioId, "productions", productionId],
@@ -485,6 +503,12 @@ export default function RecordingRoom() {
       return isNaN(v) || v === 0 ? 0.625 : Math.min(0.80, Math.max(0.25, v));
     } catch { return 0.625; }
   });
+
+  const [isLandscapeMobile, setIsLandscapeMobile] = useState<boolean>(() => {
+    if (typeof window === 'undefined') return false;
+    return window.innerWidth > window.innerHeight && window.innerHeight < 500;
+  });
+  const isLandscapeMobileRef = useRef(false);
 
   const [dawTimelineH, setDawTimelineH] = useState<number>(() => {
     try {
@@ -881,8 +905,19 @@ export default function RecordingRoom() {
   const [showAllTracks, setShowAllTracks] = useState(false);
 
 
+  const { data: myStudioRoleData } = useMyStudioRole(studioId ?? "");
+  const { data: studioMembersData = [] } = useStudioMembers(studioId ?? "");
+
+  const studioRoleMap = useMemo(() => {
+    const map = new Map<string, string>();
+    for (const m of studioMembersData as any[]) {
+      if (m.userId && m.role) map.set(m.userId, m.role);
+    }
+    return map;
+  }, [studioMembersData]);
+
   // Unified role checks via hook
-  const { sessionRole: myStudioRole, isPrivileged, isDirector } = useUserRole({ user, session });
+  const { sessionRole: myStudioRole, isPrivileged, isDirector } = useUserRole({ user, session, studioRole: myStudioRoleData?.role });
 
   const canControl = useMemo(() => {
     return isPrivileged || globalControlEnabled || controlPermissions.has(user?.id || "");
@@ -893,16 +928,19 @@ export default function RecordingRoom() {
     return Boolean(user?.id && textControllerUserIds.has(user.id));
   }, [isPrivileged, isDirector, textControllerUserIds, user?.id]);
 
-  const presenceRoster = useMemo(() =>
-    presenceUsers.length
+  const presenceRoster = useMemo(() => {
+    const base = presenceUsers.length
       ? presenceUsers
       : (session?.participants || []).map((p: any) => ({
           userId: p.userId,
           name: p.user?.fullName || p.user?.displayName || p.user?.email || "Usuario",
           role: p.role,
-        })),
-    [presenceUsers, session?.participants]
-  );
+        }));
+    return base.map((p: any) => ({
+      ...p,
+      role: studioRoleMap.get(p.userId) || p.role,
+    }));
+  }, [presenceUsers, session?.participants, studioRoleMap]);
 
   const loopRange = useMemo(() => {
     if (!isLooping) return null;
@@ -1541,7 +1579,12 @@ export default function RecordingRoom() {
 
   // ── Mobile: watch resize + orientation ────────────────────────────────────
   useEffect(() => {
-    const check = () => setIsMobile(window.innerWidth < 640);
+    const check = () => {
+      setIsMobile(window.innerWidth < 640);
+      const ls = window.innerWidth > window.innerHeight && window.innerHeight < 500;
+      setIsLandscapeMobile(ls);
+      isLandscapeMobileRef.current = ls;
+    };
     window.addEventListener('resize', check);
     return () => window.removeEventListener('resize', check);
   }, []);
@@ -1549,6 +1592,11 @@ export default function RecordingRoom() {
     const onOrient = () => {
       setMobileVideoH(20);
       try { localStorage.removeItem('daw-mobile-video-height'); } catch {}
+      setTimeout(() => {
+        const ls = window.innerWidth > window.innerHeight && window.innerHeight < 500;
+        setIsLandscapeMobile(ls);
+        isLandscapeMobileRef.current = ls;
+      }, 150);
     };
     window.addEventListener('orientationchange', onOrient);
     return () => window.removeEventListener('orientationchange', onOrient);
@@ -1584,7 +1632,9 @@ export default function RecordingRoom() {
     const onPointerMove = (ev: PointerEvent) => {
       if (!isDraggingRef.current) return;
       const rect = container.getBoundingClientRect();
-      const ratio = Math.min(0.80, Math.max(0.25, (ev.clientX - rect.left) / rect.width));
+      const maxR = isLandscapeMobileRef.current ? 0.60 : 0.80;
+      const minR = isLandscapeMobileRef.current ? 0.30 : 0.25;
+      const ratio = Math.min(maxR, Math.max(minR, (ev.clientX - rect.left) / rect.width));
       splitRatioRef.current = ratio;
       setSplitRatio(ratio);
     };
@@ -3237,11 +3287,11 @@ export default function RecordingRoom() {
       <div ref={splitContainerRef} className="flex-1 flex overflow-hidden" style={{ flexDirection: isMobile ? 'column' : 'row' }}>
         <div className="flex flex-col" style={isMobile
           ? { width: '100%', height: `${mobileVideoH}vh`, flexShrink: 0 }
-          : { width: `${splitRatio * 100}%`, minWidth: '25%', maxWidth: '80%', minHeight: 0 }}>
+          : { width: `${(isLandscapeMobile ? Math.min(0.60, Math.max(0.30, splitRatio > 0.60 ? 0.40 : splitRatio)) : splitRatio) * 100}%`, minWidth: isLandscapeMobile ? '30%' : '25%', maxWidth: isLandscapeMobile ? '60%' : '80%', minHeight: 0 }}>
           {/* Video container — always rendered here; when floating a placeholder is shown */}
           <div
             className="flex-1 relative overflow-hidden"
-            style={{ minHeight: isMobile ? 0 : 240, background: "rgb(10,10,14)", border: "1px solid rgba(0,0,0,0.15)", margin: "4px 4px 0 4px", borderRadius: "12px" }}
+            style={{ minHeight: (isMobile || isLandscapeMobile) ? 0 : 240, background: "rgb(10,10,14)", border: "1px solid rgba(0,0,0,0.15)", margin: "4px 4px 0 4px", borderRadius: "12px" }}
             onDoubleClick={() => setVideoFloating(f => !f)}
           >
             {videoFloating ? (
@@ -3289,6 +3339,60 @@ export default function RecordingRoom() {
                 >
                   {isMuted ? <VolumeX className="w-4 h-4" /> : <Volume2 className="w-4 h-4" />}
                 </button>
+
+                {/* Landscape floating recording controls */}
+                {isLandscapeMobile && (
+                  <div style={{ position: 'absolute', bottom: 8, right: 8, display: 'flex', alignItems: 'center', gap: 5, background: 'rgba(6,8,16,0.82)', backdropFilter: 'blur(14px)', WebkitBackdropFilter: 'blur(14px)', padding: '5px 7px', borderRadius: 12, zIndex: 10, border: '1px solid rgba(255,255,255,0.07)', boxShadow: '0 4px 24px rgba(0,0,0,0.5)' }}>
+                    <button
+                      onClick={canTextControl ? () => seek(-2) : undefined}
+                      disabled={!canTextControl}
+                      style={{ width: 40, height: 40, borderRadius: 8, background: 'rgba(255,255,255,0.08)', border: '1px solid rgba(255,255,255,0.11)', color: canTextControl ? 'rgba(255,255,255,0.80)' : 'rgba(255,255,255,0.25)', display: 'flex', alignItems: 'center', justifyContent: 'center', cursor: canTextControl ? 'pointer' : 'default', flexShrink: 0 }}
+                      data-testid="button-landscape-back"
+                      title="Voltar 2s"
+                    >
+                      <RotateCcw className="w-4 h-4" />
+                    </button>
+                    <button
+                      onClick={canTextControl ? handlePlayPause : undefined}
+                      disabled={!canTextControl}
+                      style={{ width: 44, height: 44, borderRadius: '50%', background: 'hsl(var(--secondary))', border: '1px solid rgba(255,255,255,0.18)', color: 'white', display: 'flex', alignItems: 'center', justifyContent: 'center', cursor: canTextControl ? 'pointer' : 'default', opacity: canTextControl ? 1 : 0.35, flexShrink: 0, boxShadow: '0 2px 8px rgba(0,0,0,0.3)' }}
+                      data-testid="button-landscape-play"
+                      title="Play/Pause"
+                    >
+                      {isPlaying ? <Pause className="w-5 h-5" /> : <Play className="w-5 h-5 ml-0.5" />}
+                    </button>
+                    {(recordingStatus === 'idle' || recordingStatus === 'countdown') ? (
+                      <button
+                        onClick={canTextControl ? startCountdown : undefined}
+                        disabled={!canTextControl || !micReady || recordingStatus === 'countdown'}
+                        style={{ width: 44, height: 44, borderRadius: '50%', background: recordingStatus === 'countdown' ? 'hsl(var(--primary) / 0.18)' : 'rgba(255,255,255,0.08)', border: `1px solid ${recordingStatus === 'countdown' ? 'hsl(var(--primary) / 0.40)' : 'rgba(255,255,255,0.12)'}`, color: 'white', display: 'flex', alignItems: 'center', justifyContent: 'center', cursor: (canTextControl && micReady) ? 'pointer' : 'default', opacity: (canTextControl && micReady) ? 1 : 0.30, flexShrink: 0 }}
+                        data-testid="button-landscape-record"
+                        title="Gravar"
+                      >
+                        <Mic className="w-5 h-5" />
+                      </button>
+                    ) : recordingStatus === 'recording' ? (
+                      <button
+                        onClick={canTextControl ? handleStopRecording : undefined}
+                        disabled={!canTextControl}
+                        style={{ width: 44, height: 44, borderRadius: '50%', background: 'hsl(0 72% 51%)', boxShadow: '0 0 18px rgba(239,68,68,0.50)', color: 'white', display: 'flex', alignItems: 'center', justifyContent: 'center', cursor: 'pointer', flexShrink: 0 }}
+                        data-testid="button-landscape-stop-rec"
+                        title="Parar gravação"
+                      >
+                        <Square className="w-5 h-5 fill-white" />
+                      </button>
+                    ) : null}
+                    <button
+                      onClick={canTextControl ? () => seek(2) : undefined}
+                      disabled={!canTextControl}
+                      style={{ width: 40, height: 40, borderRadius: 8, background: 'rgba(255,255,255,0.08)', border: '1px solid rgba(255,255,255,0.11)', color: canTextControl ? 'rgba(255,255,255,0.80)' : 'rgba(255,255,255,0.25)', display: 'flex', alignItems: 'center', justifyContent: 'center', cursor: canTextControl ? 'pointer' : 'default', flexShrink: 0 }}
+                      data-testid="button-landscape-forward"
+                      title="Avançar 2s"
+                    >
+                      <RotateCw className="w-4 h-4" />
+                    </button>
+                  </div>
+                )}
               </>
             )}
           </div>
@@ -3366,9 +3470,9 @@ export default function RecordingRoom() {
             </div>
           )}
 
-          <div className="shrink-0 px-3 sm:px-5 py-3 sm:py-0 flex flex-col sm:flex-row sm:items-center justify-between gap-3 sm:gap-0" style={{ background: "hsl(var(--card))", backdropFilter: "blur(12px)", WebkitBackdropFilter: "blur(12px)", borderTop: "1px solid hsl(var(--border))", boxShadow: "0 -1px 3px rgba(0,0,0,0.04)" }}>
-            <div className="hidden sm:flex w-full sm:w-56 shrink-0 flex flex-col justify-center gap-1 py-0 sm:py-3">
-              <div className="flex items-center justify-between text-[10px] mb-0.5" style={{ color: "hsl(var(--muted-foreground))" }}>
+          <div className="shrink-0 px-3 sm:px-5 py-3 sm:py-0 flex flex-col sm:flex-row sm:items-center justify-between gap-3 sm:gap-0" style={{ background: "hsl(var(--card))", backdropFilter: "blur(12px)", WebkitBackdropFilter: "blur(12px)", borderTop: "1px solid hsl(var(--border))", boxShadow: "0 -1px 3px rgba(0,0,0,0.04)", ...(isLandscapeMobile ? { height: 40, overflow: 'hidden', padding: '0 8px' } : {}) }}>
+            <div className="hidden sm:flex w-full sm:w-56 shrink-0 flex flex-col justify-center gap-1 py-0 sm:py-3" style={isLandscapeMobile ? { width: '100%', height: '100%', padding: 0, gap: 0 } : undefined}>
+              <div className="flex items-center justify-between text-[10px] mb-0.5" style={{ color: "hsl(var(--muted-foreground))", display: isLandscapeMobile ? 'none' : undefined }}>
                 <span className="uppercase tracking-wider">
                   {recordingStatus === "recording" ? "Ao Vivo" :
                     recordingStatus === "previewing" ? "Reproduzindo" :
@@ -3401,10 +3505,11 @@ export default function RecordingRoom() {
                 lastRecording={lastRecording}
                 previewAudioRef={previewAudioRef}
                 savedSamples={null}
+                compact={isLandscapeMobile}
               />
             </div>
 
-            <div className="w-full sm:w-auto flex flex-row sm:flex-row items-center justify-center gap-2">
+            <div className="w-full sm:w-auto flex flex-row sm:flex-row items-center justify-center gap-2" style={isLandscapeMobile ? { display: 'none' } : undefined}>
               <button
                 onClick={canTextControl ? () => seek(-2) : undefined}
                 disabled={!canTextControl}
@@ -3502,7 +3607,7 @@ export default function RecordingRoom() {
               </button>
             </div>
 
-            <div className="hidden sm:flex w-full sm:w-44 shrink-0 flex-col items-start sm:items-end gap-1.5">
+            <div className="hidden sm:flex w-full sm:w-44 shrink-0 flex-col items-start sm:items-end gap-1.5" style={isLandscapeMobile ? { display: 'none' } : undefined}>
               {isLooping && loopRange && (
                 <div className="flex flex-col items-end gap-0.5">
                   <div className="flex items-center gap-1.5 text-[10px] font-mono" style={{ color: "hsl(var(--muted-foreground))" }}>
