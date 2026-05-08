@@ -2830,5 +2830,161 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     }
   });
 
+  // ─────────────────────────────────────────────
+  //  MTG-STUDIO INTEGRATION
+  // ─────────────────────────────────────────────
+
+  const MTG_URL = process.env.MTG_STUDIO_URL || "http://localhost:8000";
+
+  // Proxy: GET job status
+  app.get("/api/mtg/job/:jobId/status", requireAuth, async (req, res) => {
+    try {
+      const r = await fetch(`${MTG_URL}/api/job/${req.params.jobId}/status`);
+      const data = await r.json();
+      res.status(r.status).json(data);
+    } catch {
+      res.status(503).json({ message: "MTG-STUDIO indisponível. Execute: npm run mtg:start" });
+    }
+  });
+
+  // Proxy: GET download final video — streams to avoid buffering large files in memory
+  app.get("/api/mtg/job/:jobId/download/:filename", requireAuth, async (req, res) => {
+    try {
+      const r = await fetch(`${MTG_URL}/api/download/${req.params.filename}`);
+      if (!r.ok) return res.status(r.status).json({ message: "Arquivo não encontrado no MTG-STUDIO" });
+      if (!r.body) return res.status(502).json({ message: "Resposta vazia do MTG-STUDIO" });
+      res.setHeader("Content-Type", r.headers.get("content-type") || "video/mp4");
+      const cl = r.headers.get("content-length");
+      if (cl) res.setHeader("Content-Length", cl);
+      res.setHeader("Content-Disposition", `attachment; filename="${req.params.filename}"`);
+      const { Readable } = await import("stream");
+      Readable.fromWeb(r.body as any).pipe(res);
+    } catch {
+      res.status(503).json({ message: "MTG-STUDIO indisponível" });
+    }
+  });
+
+  // Finalize session: export approved takes → send to MTG-STUDIO
+  app.post("/api/sessions/:sessionId/finalize", requireAuth, async (req, res) => {
+    try {
+      const session = await verifySessionAccess(req, res, req.params.sessionId);
+      if (!session) return;
+
+      // Get approved takes with character/actor info
+      const allTakes = await storage.getSessionTakesWithDetails(req.params.sessionId);
+      const approved = allTakes.filter((t: any) => t.status === "approved");
+      if (approved.length === 0) {
+        return res.status(400).json({ message: "Nenhum take aprovado encontrado nesta sessão." });
+      }
+
+      // Get session video URL
+      const production = await storage.getProduction((session as any).productionId);
+      const videoUrl: string = (production as any)?.videoUrl || "";
+      if (!videoUrl) {
+        return res.status(400).json({ message: "Produção sem vídeo de referência. Adicione um vídeo à produção." });
+      }
+
+      // 1. Upload video to MTG-STUDIO
+      const FormDataLib = (await import("form-data")).default;
+
+      const _uploadVideoToMtg = async (vidBuf: Buffer, filename: string): Promise<string> => {
+        const fd = new FormDataLib();
+        fd.append("file", vidBuf, { filename, contentType: "video/mp4" });
+        const uploadRes = await fetch(`${MTG_URL}/api/upload/video`, { method: "POST", body: fd as any, headers: fd.getHeaders() });
+        if (!uploadRes.ok) {
+          const err = await uploadRes.json().catch(() => ({}));
+          throw new Error(`MTG: ${(err as any).detail || "Erro ao subir vídeo"}`);
+        }
+        const uploadData = await uploadRes.json();
+        return uploadData.job_id as string;
+      };
+
+      let jobId: string;
+      if (/^https?:\/\//i.test(videoUrl)) {
+        const vidRes = await fetch(videoUrl);
+        if (!vidRes.ok) return res.status(400).json({ message: "Não foi possível baixar o vídeo da produção." });
+        const vidBuf = Buffer.from(await vidRes.arrayBuffer());
+        const ext = videoUrl.split(".").pop()?.split("?")[0] || "mp4";
+        try { jobId = await _uploadVideoToMtg(vidBuf, `video.${ext}`); }
+        catch (e: any) { return res.status(500).json({ message: e.message }); }
+      } else {
+        const localPath = path.join(process.cwd(), "public", videoUrl.replace(/^\/+/, ""));
+        if (!fs.existsSync(localPath)) return res.status(400).json({ message: "Arquivo de vídeo não encontrado localmente." });
+        const vidBuf = fs.readFileSync(localPath);
+        const ext = path.extname(localPath).slice(1) || "mp4";
+        try { jobId = await _uploadVideoToMtg(vidBuf, `video.${ext}`); }
+        catch (e: any) { return res.status(500).json({ message: e.message }); }
+      }
+
+      // Wait a moment for Demucs to start registering the job
+      await new Promise(r2 => setTimeout(r2, 500));
+
+      // 2. Upload approved takes as WAV files named PERSONAGEM_DUBLADOR_TIMECODE.wav
+      const fd2 = new FormDataLib();
+      let takesUploaded = 0;
+
+      for (const take of approved) {
+        const charName = ((take as any).characterName || "PERSONAGEM").toUpperCase().replace(/[^A-Z0-9]/g, "");
+        const actorName = ((take as any).voiceActorName || "DUBLADOR").toUpperCase().replace(/[^A-Z0-9]/g, "");
+        const startSec = (take as any).startTimeSeconds ?? 0;
+        const hh = Math.floor(startSec / 3600);
+        const mm = Math.floor((startSec % 3600) / 60);
+        const ss = Math.floor(startSec % 60);
+        const ms = Math.round((startSec % 1) * 1000);
+        const timecode = `${String(hh).padStart(2, "0")}${String(mm).padStart(2, "0")}${String(ss).padStart(2, "0")}${String(ms).padStart(3, "0")}`;
+        const mtgFilename = `${charName}_${actorName}_${timecode}.wav`;
+
+        const audioUrl: string = (take as any).audioUrl || "";
+        let audioBuf: Buffer | null = null;
+
+        try {
+          const supabaseParsed = parseSupabaseStorageUrl(audioUrl);
+          if (supabaseParsed && isSupabaseConfigured()) {
+            const dl = await downloadFromSupabaseStorageUrl(audioUrl);
+            audioBuf = Buffer.from(await dl.arrayBuffer());
+          } else if (audioUrl.startsWith("/uploads/")) {
+            audioBuf = fs.readFileSync(path.join(process.cwd(), "public", audioUrl));
+          } else if (/^https?:\/\//i.test(audioUrl)) {
+            const dl = await fetch(audioUrl);
+            if (dl.ok) audioBuf = Buffer.from(await dl.arrayBuffer());
+          }
+        } catch (e: any) {
+          logger.warn(`[MTG Finalize] Skipping take ${take.id}: ${e?.message}`);
+          continue;
+        }
+
+        if (!audioBuf) continue;
+        fd2.append("files", audioBuf, { filename: mtgFilename, contentType: "audio/wav" });
+        takesUploaded++;
+      }
+
+      if (takesUploaded === 0) {
+        return res.status(400).json({ message: "Não foi possível baixar nenhum take aprovado." });
+      }
+
+      const takesRes = await fetch(`${MTG_URL}/api/upload/takes/${jobId}`, { method: "POST", body: fd2 as any, headers: fd2.getHeaders() });
+      if (!takesRes.ok) {
+        const err = await takesRes.json().catch(() => ({}));
+        return res.status(500).json({ message: `MTG takes: ${(err as any).detail || "Erro ao subir takes"}` });
+      }
+
+      // 3. Start processing
+      const processRes = await fetch(`${MTG_URL}/api/job/${jobId}/process`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ volume_me: 0.8, volume_dialogos: 1.0, lipsync_trim: true }),
+      });
+      if (!processRes.ok) {
+        const err = await processRes.json().catch(() => ({}));
+        return res.status(500).json({ message: `MTG process: ${(err as any).detail || "Erro ao iniciar processamento"}` });
+      }
+
+      res.json({ jobId, takesUploaded, message: "Pós-produção iniciada com sucesso." });
+    } catch (err: any) {
+      logger.error("[MTG Finalize]", err);
+      res.status(500).json({ message: err?.message || "Erro ao finalizar sessão" });
+    }
+  });
+
   return httpServer;
 }
