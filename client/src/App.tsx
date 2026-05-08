@@ -56,6 +56,8 @@ const Profile = lazyWithRetry(() => import("@studio/pages/profile"));
 const Daw = lazyWithRetry(() => import("@studio/pages/daw"));
 
 const SecretariaApp = lazyWithRetry(() => import("@secretaria/App").then(m => ({ default: m.SecretariaApp })));
+const B2BEscolas = lazyWithRetry(() => import("@secretaria/portal/B2BEscolas").then(m => ({ default: m.B2BEscolas })));
+const B2BEstudios = lazyWithRetry(() => import("@secretaria/portal/B2BEstudios").then(m => ({ default: m.B2BEstudios })));
 
 import { StudioLayout } from "@studio/components/layout/studio-layout";
 
@@ -108,6 +110,23 @@ function Router() {
             <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} className="w-full">
               <SecretariaApp />
             </motion.div>
+          </Route>
+
+          {/* B2B Landing Pages */}
+          <Route path="/b2b/escolas">
+            <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} className="w-full">
+              <B2BEscolas />
+            </motion.div>
+          </Route>
+
+          <Route path="/b2b/estudios">
+            <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} className="w-full">
+              <B2BEstudios />
+            </motion.div>
+          </Route>
+
+          <Route path="/b2b">
+            <Redirect to="/b2b/escolas" />
           </Route>
 
           {/* HUBDUB-STUDIO Fusion Routes */}

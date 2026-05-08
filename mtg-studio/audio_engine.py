@@ -15,8 +15,6 @@ import numpy as np
 import soundfile as sf
 from pydub import AudioSegment
 
-from audio_quality import apply_ducking, numpy_to_audiosegment, process_take
-
 
 def _ffmpeg_exe() -> str:
     """Return the bundled ffmpeg binary path (from imageio_ffmpeg/moviepy)."""
@@ -191,7 +189,7 @@ def separate_with_demucs(video_path: str, output_dir: str, job_id: str, progress
         result = subprocess.run([
             sys.executable, "-m", "demucs",
             "--two-stems", "vocals",
-            "-n", "htdemucs_ft",
+            "-n", "htdemucs",
             "--device", device,
             "-o", str(demucs_out),
             str(audio_extract_path),
@@ -280,7 +278,7 @@ def _get_whisper_model():
     global _whisper_model
     if _whisper_model is None:
         import whisper
-        _whisper_model = whisper.load_model("small")
+        _whisper_model = whisper.load_model("tiny")
     return _whisper_model
 
 
@@ -423,13 +421,7 @@ def build_combo_audio(
         def _overlay_take_segment(t: dict) -> None:
             """Overlay a single take segment (or split_tail) onto dialogue_track."""
             nonlocal dialogue_track
-            # Apply cinema-grade quality pipeline (noise reduction, compression, normalization)
-            try:
-                audio_np, sr_np = process_take(t["filepath"], sr_out=_TARGET_SR)
-                seg = numpy_to_audiosegment(audio_np, sr_np).set_channels(_TARGET_CHANNELS)
-            except Exception as exc:
-                logger.warning("Quality pipeline failed for %s (%s) — using raw audio", t["filename"], exc)
-                seg = AudioSegment.from_wav(t["filepath"]).set_frame_rate(_TARGET_SR).set_channels(_TARGET_CHANNELS)
+            seg = AudioSegment.from_wav(t["filepath"]).set_frame_rate(_TARGET_SR).set_channels(_TARGET_CHANNELS)
             effective_pos = t["position_ms"]
 
             if t.get("start_trim_ms", 0) > 0:
@@ -490,15 +482,6 @@ def build_combo_audio(
         me_db = 20.0 * math.log10(max(me_vol, 0.001))
         me_seg = me_seg + me_db
 
-    # Apply ducking: M&E lowers automatically during speech
-    try:
-        me_np = np.array(me_seg.get_array_of_samples(), dtype=np.float32).reshape(-1, me_seg.channels) / 32768.0
-        dlg_np = np.array(dialogue_track.get_array_of_samples(), dtype=np.float32).reshape(-1, dialogue_track.channels) / 32768.0
-        me_np_ducked = apply_ducking(me_np, dlg_np, _TARGET_SR, reduction_db=5.0)
-        me_seg = numpy_to_audiosegment(me_np_ducked, _TARGET_SR).set_channels(_TARGET_CHANNELS)
-    except Exception as exc:
-        logger.warning("Ducking failed (%s) — using flat M&E", exc)
-
     final_mix = me_seg.overlay(dialogue_track, position=0)
 
     tmp = tempfile.NamedTemporaryFile(suffix=".wav", delete=False)
@@ -531,8 +514,7 @@ def export_video_with_audio(video_path: str, audio_wav_path: str, output_path: s
         "-map", "1:a:0",
         "-c:v", "copy",
         "-c:a", "aac",
-        "-b:a", "320k",
-        "-profile:a", "aac_low",
+        "-b:a", "192k",
         str(output_path),
     ]
     try:

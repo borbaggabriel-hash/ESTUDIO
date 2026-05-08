@@ -61,6 +61,12 @@ export function AdminPanel({ data, onSave, onClose }: any) {
   const [recoveryPwd, setRecoveryPwd] = useState('');
   const [recoveryPwdConfirm, setRecoveryPwdConfirm] = useState('');
   const [isResetting, setIsResetting] = useState(false);
+  const [vendedores, setVendedores] = useState<any[]>([]);
+  const [newVendedor, setNewVendedor] = useState({ full_name: '', email: '', password: '', percentual: '10' });
+  const [isCreatingVendedor, setIsCreatingVendedor] = useState(false);
+  const [vendedorSearch, setVendedorSearch] = useState('');
+  const [supportStatusFilter, setSupportStatusFilter] = useState<string>('todos');
+  const [supportCategoryFilter, setSupportCategoryFilter] = useState<string>('todos');
 
   const handleSeedDatabase = async () => {
     const confirmed = window.confirm(
@@ -105,7 +111,7 @@ export function AdminPanel({ data, onSave, onClose }: any) {
   const loadAdminData = async () => {
     setIsLoading(true);
     try {
-      const [students, enrollments, activity, siteData, tickets, dirs, dirs2] = await Promise.all([
+      const [students, enrollments, activity, siteData, tickets, dirs, dirs2, vends] = await Promise.all([
         firebaseService.getAllStudents(),
         firebaseService.getAllEnrollments(),
         firebaseService.getAllActivity(),
@@ -113,10 +119,12 @@ export function AdminPanel({ data, onSave, onClose }: any) {
         firebaseService.getAllSupportTickets(),
         firebaseService.getDirectors(),
         firebaseService.getDiretores(),
+        fetch('/api/hub/admin/vendedores', { credentials: 'include' }).then(r => r.json()).catch(() => []),
       ]);
       setAllSupportTickets((tickets as any[]) || []);
       setDirectors((dirs as any[]) || []);
       setDiretores((dirs2 as any[]) || []);
+      setVendedores(Array.isArray(vends) ? vends : []);
 
       setDraft((prev: any) => ({
         ...prev,
@@ -127,12 +135,12 @@ export function AdminPanel({ data, onSave, onClose }: any) {
           avatar: s.avatar_url || s.avatar || `https://i.pravatar.cc/150?u=${s.id}`
         })) || [],
         enrollments: enrollments || [],
-        recentActivity: activity?.map((a: any) => ({
+        recentActivity: (activity || []).filter(Boolean).map((a: any) => ({
           id: a.id,
           user: a.student_id,
           action: a.activity_type,
           target: a.description,
-          time: new Date(a.created_at?.seconds * 1000 || a.created_at).toLocaleString(),
+          time: a.created_at ? new Date(a.created_at?.seconds ? a.created_at.seconds * 1000 : a.created_at).toLocaleString() : '—',
           avatar: "https://i.pravatar.cc/150?u=" + a.student_id
         })) || []
       }));
@@ -680,6 +688,7 @@ export function AdminPanel({ data, onSave, onClose }: any) {
     { id: 'testimonials', label: 'Depoimentos', icon: MessageSquare },
     { id: 'faqs', label: 'FAQs', icon: HelpCircle },
     { id: 'banners', label: 'Banners', icon: ImageIcon },
+    { id: 'vendedores', label: 'Vendedores', icon: TrendingUp },
     { id: 'suporte', label: 'Suporte', icon: Headphones },
     { id: 'settings', label: 'Configurações', icon: Settings },
     { id: 'promocao', label: 'Promoção', icon: Megaphone },
@@ -2304,6 +2313,151 @@ export function AdminPanel({ data, onSave, onClose }: any) {
                 </motion.div>
               )}
 
+              {/* VENDEDORES TAB */}
+              {activeTab === 'vendedores' && (
+                <motion.div key="vendedores" initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: -20 }} className="space-y-8">
+                  <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+                    <div>
+                      <h2 className="text-2xl text-gray-900 font-display">Vendedores</h2>
+                      <p className="text-sm text-gray-500 mt-1">Gerencie vendedores e suas taxas de comissão.</p>
+                    </div>
+                    <Button onClick={() => setIsCreatingVendedor(v => !v)} className="bg-gray-900 hover:bg-gray-700 text-white font-bold rounded-xl whimsy-hover shrink-0">
+                      <Plus className="w-4 h-4 mr-2" /> Novo Vendedor
+                    </Button>
+                  </div>
+
+                  <AnimatePresence>
+                    {isCreatingVendedor && (
+                      <motion.div initial={{ opacity: 0, height: 0 }} animate={{ opacity: 1, height: 'auto' }} exit={{ opacity: 0, height: 0 }} className="overflow-hidden">
+                        <form
+                          onSubmit={async (e) => {
+                            e.preventDefault();
+                            if (!newVendedor.full_name || !newVendedor.email || !newVendedor.password) {
+                              toast.error('Preencha todos os campos.'); return;
+                            }
+                            setIsLoading(true);
+                            try {
+                              const res = await fetch('/api/hub/admin/students', {
+                                method: 'POST', credentials: 'include',
+                                headers: { 'Content-Type': 'application/json' },
+                                body: JSON.stringify({ ...newVendedor, role: 'vendedor' }),
+                              });
+                              const data = await res.json();
+                              if (!res.ok) throw new Error(data.message);
+                              await fetch(`/api/hub/admin/users/${data.id}/role`, {
+                                method: 'PATCH', credentials: 'include',
+                                headers: { 'Content-Type': 'application/json' },
+                                body: JSON.stringify({ role: 'vendedor' }),
+                              });
+                              await fetch(`/api/hub/admin/vendedores/${data.id}/comissao`, {
+                                method: 'PATCH', credentials: 'include',
+                                headers: { 'Content-Type': 'application/json' },
+                                body: JSON.stringify({ percentual: parseFloat(newVendedor.percentual) || 10 }),
+                              });
+                              toast.success(`Vendedor ${newVendedor.email} criado.`);
+                              setNewVendedor({ full_name: '', email: '', password: '', percentual: '10' });
+                              setIsCreatingVendedor(false);
+                              const vends = await fetch('/api/hub/admin/vendedores', { credentials: 'include' }).then(r => r.json()).catch(() => []);
+                              setVendedores(Array.isArray(vends) ? vends : []);
+                            } catch (err: any) {
+                              toast.error(err.message || 'Erro ao criar vendedor.');
+                            } finally { setIsLoading(false); }
+                          }}
+                          className="glass-panel p-6 rounded-3xl border-gray-100 space-y-4 mb-4"
+                        >
+                          <h3 className="text-gray-900 font-semibold">Novo Vendedor</h3>
+                          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                            <div>
+                              <label className="block text-xs text-gray-500 uppercase tracking-widest mb-1.5">Nome completo</label>
+                              <input type="text" value={newVendedor.full_name} onChange={e => setNewVendedor(p => ({ ...p, full_name: e.target.value }))} placeholder="Nome" className="w-full bg-gray-50 border border-gray-200 rounded-xl px-4 py-3 text-sm focus:border-gray-400 transition-all" required />
+                            </div>
+                            <div>
+                              <label className="block text-xs text-gray-500 uppercase tracking-widest mb-1.5">Email</label>
+                              <input type="email" value={newVendedor.email} onChange={e => setNewVendedor(p => ({ ...p, email: e.target.value }))} placeholder="email@exemplo.com" className="w-full bg-gray-50 border border-gray-200 rounded-xl px-4 py-3 text-sm focus:border-gray-400 transition-all" required />
+                            </div>
+                            <div>
+                              <label className="block text-xs text-gray-500 uppercase tracking-widest mb-1.5">Senha</label>
+                              <input type="password" value={newVendedor.password} onChange={e => setNewVendedor(p => ({ ...p, password: e.target.value }))} placeholder="Mínimo 6 caracteres" className="w-full bg-gray-50 border border-gray-200 rounded-xl px-4 py-3 text-sm focus:border-gray-400 transition-all" required />
+                            </div>
+                            <div>
+                              <label className="block text-xs text-gray-500 uppercase tracking-widest mb-1.5">Comissão (%)</label>
+                              <input type="number" min="0" max="100" step="0.5" value={newVendedor.percentual} onChange={e => setNewVendedor(p => ({ ...p, percentual: e.target.value }))} className="w-full bg-gray-50 border border-gray-200 rounded-xl px-4 py-3 text-sm focus:border-gray-400 transition-all" />
+                            </div>
+                          </div>
+                          <div className="flex gap-3">
+                            <Button type="submit" disabled={isLoading} className="bg-gray-900 hover:bg-gray-700 text-white font-bold rounded-xl">
+                              {isLoading ? 'Criando...' : 'Criar Vendedor'}
+                            </Button>
+                            <Button type="button" onClick={() => setIsCreatingVendedor(false)} variant="outline" className="border-gray-200 text-gray-700 hover:bg-gray-100 rounded-xl">Cancelar</Button>
+                          </div>
+                        </form>
+                      </motion.div>
+                    )}
+                  </AnimatePresence>
+
+                  <div className="relative mb-2">
+                    <Search className="absolute left-4 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-400" />
+                    <input type="text" value={vendedorSearch} onChange={e => setVendedorSearch(e.target.value)} placeholder="Buscar vendedor..." className="w-full pl-11 pr-4 py-3 bg-white border border-gray-200 rounded-xl text-sm focus:outline-none focus:border-gray-400 transition-colors" />
+                  </div>
+
+                  {vendedores.filter(v => (v.fullName || v.email || '').toLowerCase().includes(vendedorSearch.toLowerCase())).length === 0 ? (
+                    <div className="glass-panel p-12 rounded-3xl border-gray-100 flex flex-col items-center justify-center text-center">
+                      <Users className="w-12 h-12 text-gray-600 mb-4" />
+                      <p className="text-gray-400 font-medium">Nenhum vendedor cadastrado ainda.</p>
+                    </div>
+                  ) : (
+                    <div className="space-y-4">
+                      {vendedores.filter(v => (v.fullName || v.email || '').toLowerCase().includes(vendedorSearch.toLowerCase())).map((v: any) => (
+                        <div key={v.id} className="glass-panel p-6 rounded-3xl border-gray-100 flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+                          <div className="flex items-center gap-4">
+                            <div className="w-10 h-10 rounded-full bg-violet-100 text-violet-600 flex items-center justify-center font-bold text-sm shrink-0">
+                              {(v.fullName || v.email || '?')[0].toUpperCase()}
+                            </div>
+                            <div>
+                              <p className="text-gray-900 font-semibold">{v.fullName || v.displayName || '—'}</p>
+                              <p className="text-sm text-gray-500">{v.email}</p>
+                            </div>
+                          </div>
+                          <div className="flex items-center gap-4">
+                            <div className="flex items-center gap-2">
+                              <label className="text-xs text-gray-500 uppercase tracking-widest">Comissão</label>
+                              <input
+                                type="number" min="0" max="100" step="0.5"
+                                defaultValue={v.percentual ?? 10}
+                                onBlur={async (e) => {
+                                  const val = parseFloat(e.target.value);
+                                  if (isNaN(val)) return;
+                                  await fetch(`/api/hub/admin/vendedores/${v.id}/comissao`, {
+                                    method: 'PATCH', credentials: 'include',
+                                    headers: { 'Content-Type': 'application/json' },
+                                    body: JSON.stringify({ percentual: val }),
+                                  });
+                                  toast.success('Comissão atualizada.');
+                                }}
+                                className="w-20 bg-gray-50 border border-gray-200 rounded-xl px-3 py-2 text-sm text-center focus:border-gray-400 transition-all"
+                              />
+                              <span className="text-gray-500 text-sm">%</span>
+                            </div>
+                            <Button
+                              onClick={() => setConfirmModal({ isOpen: true, title: 'Remover Vendedor', desc: `Remover acesso de vendedor de ${v.email}?`, action: async () => {
+                                await fetch(`/api/hub/admin/users/${v.id}/role`, { method: 'PATCH', credentials: 'include', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ role: 'user' }) });
+                                setVendedores(prev => prev.filter(x => x.id !== v.id));
+                                setConfirmModal(null);
+                                toast.success('Vendedor removido.');
+                              }})}
+                              className="bg-red-500/10 hover:bg-red-500/20 text-red-400 border border-red-500/20 rounded-xl"
+                              size="sm" variant="outline"
+                            >
+                              <Trash2 className="w-4 h-4" />
+                            </Button>
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </motion.div>
+              )}
+
               {/* SUPORTE TAB — Global */}
               {activeTab === 'suporte' && (
                 <motion.div
@@ -2333,21 +2487,73 @@ export function AdminPanel({ data, onSave, onClose }: any) {
                     </Button>
                   </div>
 
-                  {allSupportTickets.length === 0 ? (
+                  {/* Filtros */}
+                  <div className="flex flex-wrap gap-3">
+                    <div className="flex items-center gap-1.5 bg-white border border-gray-200 rounded-xl p-1">
+                      {['todos', 'Aberto', 'Em Análise', 'Resolvido'].map(s => (
+                        <button
+                          key={s}
+                          onClick={() => setSupportStatusFilter(s)}
+                          className={`px-3 py-1.5 rounded-lg text-xs font-semibold transition-all ${
+                            supportStatusFilter === s
+                              ? s === 'Aberto' ? 'bg-amber-100 text-amber-700'
+                                : s === 'Em Análise' ? 'bg-blue-100 text-blue-700'
+                                : s === 'Resolvido' ? 'bg-emerald-100 text-emerald-700'
+                                : 'bg-gray-900 text-white'
+                              : 'text-gray-500 hover:text-gray-800'
+                          }`}
+                        >
+                          {s === 'todos' ? 'Todos' : s}
+                        </button>
+                      ))}
+                    </div>
+                    <select
+                      value={supportCategoryFilter}
+                      onChange={e => setSupportCategoryFilter(e.target.value)}
+                      className="bg-white border border-gray-200 rounded-xl px-3 py-2 text-xs text-gray-700 focus:outline-none focus:border-gray-400 transition-colors"
+                    >
+                      <option value="todos">Todas as categorias</option>
+                      {['Dúvida sobre aulas', 'Problema técnico', 'Financeiro', 'Reposição de aula', 'Outros']
+                        .filter(cat => allSupportTickets.some((t: any) => t.subject === cat))
+                        .map(cat => <option key={cat} value={cat}>{cat}</option>)
+                      }
+                    </select>
+                    {(supportStatusFilter !== 'todos' || supportCategoryFilter !== 'todos') && (
+                      <button
+                        onClick={() => { setSupportStatusFilter('todos'); setSupportCategoryFilter('todos'); }}
+                        className="flex items-center gap-1.5 px-3 py-2 rounded-xl text-xs text-gray-500 hover:text-gray-800 border border-gray-200 bg-white hover:bg-gray-50 transition-colors"
+                      >
+                        <X className="w-3 h-3" /> Limpar filtros
+                      </button>
+                    )}
+                  </div>
+
+                  {(() => {
+                    const filtered = allSupportTickets.filter((t: any) => {
+                      const matchStatus = supportStatusFilter === 'todos' || t.status === supportStatusFilter;
+                      const matchCat = supportCategoryFilter === 'todos' || t.subject === supportCategoryFilter;
+                      return matchStatus && matchCat;
+                    });
+                    return filtered.length === 0 ? (
                     <div className="glass-panel p-12 rounded-3xl border-gray-100 flex flex-col items-center justify-center text-center">
                       <Headphones className="w-12 h-12 text-gray-600 mb-4" />
-                      <p className="text-gray-400 font-medium">Nenhum chamado ainda.</p>
-                      <p className="text-gray-600 text-sm mt-1">Clique em "Atualizar Lista" para carregar os chamados.</p>
+                      <p className="text-gray-400 font-medium">{allSupportTickets.length === 0 ? 'Nenhum chamado ainda.' : 'Nenhum chamado com esses filtros.'}</p>
+                      <p className="text-gray-600 text-sm mt-1">{allSupportTickets.length === 0 ? 'Clique em "Atualizar Lista" para carregar os chamados.' : 'Tente remover ou alterar os filtros.'}</p>
                     </div>
                   ) : (
                     <div className="space-y-4">
-                      {allSupportTickets.map((ticket: any) => (
+                      {filtered.map((ticket: any) => (
                         <div key={ticket.id} className="glass-panel p-6 rounded-3xl border-gray-100 space-y-4">
                           <div className="flex flex-col sm:flex-row sm:items-start justify-between gap-4">
                             <div className="flex-1">
                               <div className="flex items-center gap-3 mb-2">
                                 <p className="text-gray-900">{ticket.subject}</p>
-                                <span className={`px-2 py-1 rounded-full text-xs font-bold ${ 'bg-gray-100 text-gray-700' }`}>{ticket.status}</span>
+                                <span className={`px-2 py-1 rounded-full text-xs font-bold ${
+                                  ticket.status === 'Aberto' ? 'bg-amber-100 text-amber-700' :
+                                  ticket.status === 'Em Análise' ? 'bg-blue-100 text-blue-700' :
+                                  ticket.status === 'Resolvido' ? 'bg-emerald-100 text-emerald-700' :
+                                  'bg-gray-100 text-gray-700'
+                                }`}>{ticket.status}</span>
                               </div>
                               <p className="text-sm text-gray-500 mb-1">{ticket.message}</p>
                               <p className="text-xs text-gray-500">De: {ticket.name} ({ticket.email})</p>
@@ -2394,7 +2600,8 @@ export function AdminPanel({ data, onSave, onClose }: any) {
                         </div>
                       ))}
                     </div>
-                  )}
+                  );
+                  })()}
                   <div className="pt-6 border-t border-gray-200 mt-8 flex justify-end">
                     <Button onClick={() => handleSaveTab('faqs')} disabled={isLoading} className="bg-gray-900 hover:bg-gray-700 text-white font-bold rounded-xl px-8 py-5 shadow-sm transition-all whimsy-hover disabled:opacity-50 disabled:cursor-not-allowed">
                       {isLoading ? <div className="w-4 h-4 border-2 border-black/20 border-t-black rounded-full animate-spin mr-2 inline-block" /> : <Save className="w-4 h-4 mr-2" />}

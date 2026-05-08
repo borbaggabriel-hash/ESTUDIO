@@ -4,7 +4,6 @@ WORKDIR /app
 
 # Copy package files
 COPY package*.json ./
-COPY .npmrc ./
 COPY client/package*.json ./client/
 
 # Install ALL dependencies (dev included) so tsx/vite/esbuild are available
@@ -25,7 +24,6 @@ WORKDIR /app
 COPY --from=builder /app/dist ./dist
 COPY --from=builder /app/package.json ./
 COPY --from=builder /app/package-lock.json ./
-COPY --from=builder /app/.npmrc ./
 
 # Install all dependencies including devDependencies so drizzle-kit
 # is available for the preDeployCommand ("npm run db:push")

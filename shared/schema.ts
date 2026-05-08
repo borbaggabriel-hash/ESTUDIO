@@ -347,10 +347,18 @@ export const studentProfiles = pgTable("student_profiles", {
 export const studentEnrollments = pgTable("student_enrollments", {
   id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
   studentId: varchar("student_id").references(() => users.id, { onDelete: "cascade" }),
+  vendedorId: varchar("vendedor_id").references(() => users.id, { onDelete: "set null" }),
   module: text("module"),
   moduleSlug: text("module_slug"),
   status: text("status").default("Ativo"),
   progress: integer("progress").default(0),
+  updatedAt: timestamp("updated_at").defaultNow(),
+});
+
+export const vendedorComissoes = pgTable("vendedor_comissoes", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  vendedorId: varchar("vendedor_id").notNull().references(() => users.id, { onDelete: "cascade" }),
+  percentual: real("percentual").default(10),
   updatedAt: timestamp("updated_at").defaultNow(),
 });
 
@@ -411,4 +419,5 @@ export type StudentProfile = typeof studentProfiles.$inferSelect;
 export type StudentMessage = typeof studentMessages.$inferSelect;
 export type StudentInvoice = typeof studentInvoices.$inferSelect;
 export type StudentSupport = typeof studentSupport.$inferSelect;
+export type VendedorComissao = typeof vendedorComissoes.$inferSelect;
 export type StudentAgenda = typeof studentAgenda.$inferSelect;

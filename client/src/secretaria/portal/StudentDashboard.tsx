@@ -25,9 +25,9 @@ export function StudentDashboard({ onLogout, onHome, data, studentData, onRefres
 
   useEffect(() => {
     if (!uid) return;
-    firebaseService.getStudentMessages(uid).then(msgs => setMessages((msgs as any[]) || []));
-    firebaseService.getStudentInvoices(uid).then(invs => setInvoices((invs as any[]) || []));
-    firebaseService.getAgendaItems(uid).then(items => setAgendaItems((items as any[]) || []));
+    fetch('/api/hub/me/messages', { credentials: 'include' }).then(r => r.json()).then(d => setMessages(Array.isArray(d) ? d : [])).catch(() => {});
+    fetch('/api/hub/me/invoices', { credentials: 'include' }).then(r => r.json()).then(d => setInvoices(Array.isArray(d) ? d : [])).catch(() => {});
+    fetch('/api/hub/me/agenda', { credentials: 'include' }).then(r => r.json()).then(d => setAgendaItems(Array.isArray(d) ? d : [])).catch(() => {});
     firebaseService.getNotices().then(n => setNotices((n as any[]) || []));
   }, [uid]);
 
@@ -626,7 +626,7 @@ function SuporteView({ uid, profile }: { uid: string; profile: any }) {
 
   useEffect(() => {
     if (!uid) return;
-    firebaseService.getSupportTickets(uid).then(t => setTickets((t as any[]) || []));
+    fetch('/api/hub/me/support', { credentials: 'include' }).then(r => r.json()).then(d => setTickets(Array.isArray(d) ? d : [])).catch(() => {});
   }, [uid]);
 
   const handleSubmit = async (e: React.FormEvent) => {
@@ -634,14 +634,11 @@ function SuporteView({ uid, profile }: { uid: string; profile: any }) {
     if (!message.trim()) return;
     setIsSending(true);
     try {
-      await firebaseService.createSupportTicket(uid, {
-        subject,
-        message,
-        email: profile?.email || '',
-        name: profile?.full_name || 'Aluno'
-      });
-      const updated = await firebaseService.getSupportTickets(uid);
-      setTickets((updated as any[]) || []);
+      const ticketPayload: any = { subject, message, name: profile?.full_name || 'Aluno' };
+      if (profile?.email) ticketPayload.email = profile.email;
+      await firebaseService.createSupportTicket(uid, ticketPayload);
+      const updated = await fetch('/api/hub/me/support', { credentials: 'include' }).then(r => r.json()).catch(() => []);
+      setTickets(Array.isArray(updated) ? updated : []);
       setMessage('');
       setSent(true);
       setTimeout(() => setSent(false), 3000);

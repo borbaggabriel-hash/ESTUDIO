@@ -13,6 +13,7 @@ import { authService } from './services/authService';
 
 const AdminPanel = React.lazy(() => import('./components/AdminPanel').then(m => ({ default: m.AdminPanel })));
 const StudentDashboard = React.lazy(() => import('./portal/StudentDashboard').then(m => ({ default: m.StudentDashboard })));
+const VendedorPanel = React.lazy(() => import('./portal/VendedorPanel').then(m => ({ default: m.VendedorPanel })));
 const Enrollment = React.lazy(() => import('./components/Enrollment').then(m => ({ default: m.Enrollment })));
 
 
@@ -361,12 +362,14 @@ function App() {
   const [isAdminOpen, setIsAdminOpen] = useState(false);
   const [isLoginOpen, setIsLoginOpen] = useState(false);
   const [isStudentDashboardOpen, setIsStudentDashboardOpen] = useState(false);
+  const [isVendedorOpen, setIsVendedorOpen] = useState(false);
   const [currentUser, setCurrentUser] = useState<any>(null);
   const [studentData, setStudentData] = useState<any>(null);
   const [isSecretariaOpen, setIsSecretariaOpen] = useState(false);
   const [isEnrollmentOpen, setIsEnrollmentOpen] = useState(false);
   const [selectedModuleForEnrollment, setSelectedModuleForEnrollment] = useState<string | undefined>(undefined);
   const [activeFaq, setActiveFaq] = useState<number | null>(null);
+  const [isB2BDropdownOpen, setIsB2BDropdownOpen] = useState(false);
   const [showAllTeachers, setShowAllTeachers] = useState(false);
   const [isMobileMenuOpen, setIsMobileMenuOpen] = useState(false);
   const [isBannerDismissed, setIsBannerDismissed] = useState(
@@ -409,8 +412,11 @@ function App() {
           setCurrentUser(user);
           try {
             const isAdmin = user.role === 'platform_owner';
+            const isVendedor = user.role === 'vendedor';
             if (isAdmin) {
               setIsAdminOpen(true);
+            } else if (isVendedor) {
+              setIsVendedorOpen(true);
             } else {
               await loadStudentData(user.id);
               setIsStudentDashboardOpen(true);
@@ -463,8 +469,11 @@ function App() {
     setCurrentUser(user);
     setIsLoginOpen(false);
     const isAdmin = user.role === 'platform_owner';
+    const isVendedor = user.role === 'vendedor';
     if (isAdmin) {
       setIsAdminOpen(true);
+    } else if (isVendedor) {
+      setIsVendedorOpen(true);
     } else {
       setIsLoading(true);
       await loadStudentData(user.id ?? user.uid);
@@ -478,6 +487,7 @@ function App() {
     setCurrentUser(null);
     setStudentData(null);
     setIsStudentDashboardOpen(false);
+    setIsVendedorOpen(false);
   };
 
   const handleEnroll = (moduleTitle?: string) => {
@@ -553,6 +563,14 @@ function App() {
     return <Login onLogin={handleLoginSuccess} onBack={() => setIsLoginOpen(false)} />;
   }
 
+  if (isVendedorOpen) {
+    return (
+      <Suspense fallback={suspenseFallback}>
+        <VendedorPanel onLogout={handleLogout} currentUser={currentUser} />
+      </Suspense>
+    );
+  }
+
   if (isStudentDashboardOpen) {
     return (
       <Suspense fallback={suspenseFallback}>
@@ -601,6 +619,39 @@ function App() {
             {[['#curso','O Curso'],['#modulos','Módulos'],['#professores','Professores'],['#depoimentos','Depoimentos']].map(([href,label])=>(
               <a key={href} href={href} className="text-sm font-medium text-gray-500 hover:text-[#6d28d9] transition-colors">{label}</a>
             ))}
+            {/* Soluções B2B dropdown */}
+            <div className="relative" onMouseEnter={() => setIsB2BDropdownOpen(true)} onMouseLeave={() => setIsB2BDropdownOpen(false)}>
+              <button className="text-sm font-medium text-gray-500 hover:text-[#6d28d9] transition-colors flex items-center gap-1">
+                Soluções B2B
+                <ChevronDown className={`w-3.5 h-3.5 transition-transform ${isB2BDropdownOpen ? 'rotate-180' : ''}`} />
+              </button>
+              <AnimatePresence>
+                {isB2BDropdownOpen && (
+                  <motion.div
+                    initial={{ opacity: 0, y: 8 }}
+                    animate={{ opacity: 1, y: 0 }}
+                    exit={{ opacity: 0, y: 8 }}
+                    transition={{ duration: 0.15 }}
+                    className="absolute top-full left-1/2 -translate-x-1/2 mt-2 w-64 rounded-2xl bg-white border border-gray-100 shadow-xl overflow-hidden z-50"
+                  >
+                    <a href="/b2b/escolas" className="flex items-start gap-3 px-5 py-4 hover:bg-gray-50 transition-colors border-b border-gray-50">
+                      <span className="text-xl">🎓</span>
+                      <div>
+                        <p className="text-sm font-semibold text-gray-900">Escolas de Dublagem</p>
+                        <p className="text-xs text-gray-500 mt-0.5">Cursos livres e pós-graduação</p>
+                      </div>
+                    </a>
+                    <a href="/b2b/estudios" className="flex items-start gap-3 px-5 py-4 hover:bg-gray-50 transition-colors">
+                      <span className="text-xl">🎙️</span>
+                      <div>
+                        <p className="text-sm font-semibold text-gray-900">Estúdios Profissionais</p>
+                        <p className="text-xs text-gray-500 mt-0.5">Sessões remotas de dublagem</p>
+                      </div>
+                    </a>
+                  </motion.div>
+                )}
+              </AnimatePresence>
+            </div>
           </nav>
           <div className="flex items-center gap-3">
             <button onClick={() => setIsLoginOpen(true)} className="hidden md:block text-sm font-medium text-gray-500 hover:text-[#6d28d9] transition-colors">Área do Aluno</button>
@@ -623,6 +674,11 @@ function App() {
                 {[['#curso','O Curso'],['#modulos','Módulos'],['#professores','Professores'],['#depoimentos','Depoimentos']].map(([href,label])=>(
                   <a key={href} href={href} onClick={() => setIsMobileMenuOpen(false)} className="text-sm font-medium text-gray-600 hover:text-[#6d28d9] transition-colors py-3 border-b border-gray-50">{label}</a>
                 ))}
+                <div className="py-3 border-b border-gray-50">
+                  <p className="text-xs font-semibold text-gray-400 uppercase tracking-widest mb-2">Soluções B2B</p>
+                  <a href="/b2b/escolas" onClick={() => setIsMobileMenuOpen(false)} className="flex items-center gap-2 text-sm font-medium text-gray-600 hover:text-[#6d28d9] transition-colors py-1.5">🎓 Escolas de Dublagem</a>
+                  <a href="/b2b/estudios" onClick={() => setIsMobileMenuOpen(false)} className="flex items-center gap-2 text-sm font-medium text-gray-600 hover:text-[#6d28d9] transition-colors py-1.5">🎙️ Estúdios Profissionais</a>
+                </div>
                 <button onClick={() => { setIsMobileMenuOpen(false); setIsLoginOpen(true); }} className="text-sm font-medium text-gray-600 hover:text-[#6d28d9] transition-colors py-3 border-b border-gray-50 text-left">Área do Aluno</button>
                 <button onClick={() => { setIsMobileMenuOpen(false); handleEnroll(); }} className="mt-2 bg-[#6d28d9] text-white font-bold rounded-full px-5 py-3 text-sm hover:bg-[#5b21b6] transition-all text-center">Matricule-se</button>
               </nav>
