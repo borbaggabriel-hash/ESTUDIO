@@ -14,12 +14,16 @@ import { eq, and, ne } from "drizzle-orm";
 import {
   productions, characters, takes, users, studios, sessions, studioMemberships, userStudioRoles,
   notifications, sessionParticipants,
+  hubBanners, hubModules, hubTeachers, hubLearnings, hubTestimonials, hubFaqs, hubSettings,
+  hubEnrollments, studentProfiles, studentEnrollments, studentMessages, studentInvoices,
+  studentSupport, studentAgenda, studentActivity,
   type Production, type Session,
   insertProductionSchema, insertCharacterSchema, insertTakeSchema, insertSessionSchema,
 } from "@shared/schema";
 import { normalizePlatformRole } from "@shared/roles";
 import { sanitizeUser, sanitizeUsers } from "./lib/sanitize";
 import { requireAuth, requireAdmin, requireStudioAccess, requireStudioRole } from "./middleware/auth";
+import { hashPassword } from "./replit_integrations/auth/replitAuth";
 import { logger } from "./lib/logger";
 import { spawn } from "child_process";
 import { randomUUID } from "crypto";
@@ -2299,6 +2303,530 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     } catch (err: any) {
       logger.error("[Daily] Error", { message: err?.message });
       res.status(500).json({ message: "Erro ao criar sala de video" });
+    }
+  });
+
+  // ── THE HUB (SECRETARIA) ─────────────────────────────────────────────────────
+
+  function requireHubAdmin(req: Request, res: Response, next: Function) {
+    if (!req.isAuthenticated()) return res.status(401).json({ message: "Não autenticado" });
+    const user = req.user as any;
+    if (normalizePlatformRole(user?.role) !== "platform_owner") {
+      return res.status(403).json({ message: "Acesso restrito a administradores do Hub" });
+    }
+    next();
+  }
+
+  function requireHubStudent(req: Request, res: Response, next: Function) {
+    if (!req.isAuthenticated()) return res.status(401).json({ message: "Não autenticado" });
+    next();
+  }
+
+  // ── Dados públicos do site ──────────────────────────────────────────────────
+  app.get("/api/hub/site-data", async (_req, res) => {
+    try {
+      const [banners, modules, teachers, learnings, testimonials, faqs, settingsRows] = await Promise.all([
+        db.select().from(hubBanners),
+        db.select().from(hubModules),
+        db.select().from(hubTeachers),
+        db.select().from(hubLearnings),
+        db.select().from(hubTestimonials),
+        db.select().from(hubFaqs),
+        db.select().from(hubSettings),
+      ]);
+      const settings = settingsRows[0]?.data ?? {};
+      res.json({ banners, modules, teachers, learnings, testimonials, faqs, settings });
+    } catch (err: any) {
+      res.status(500).json({ message: err.message });
+    }
+  });
+
+  // ── Matrícula pública ───────────────────────────────────────────────────────
+  app.post("/api/hub/enrollments", async (req, res) => {
+    try {
+      const body = z.object({
+        name: z.string().min(2),
+        email: z.string().email(),
+        phone: z.string().optional(),
+        module: z.string().optional(),
+        moduleSlug: z.string().optional(),
+      }).parse(req.body);
+      const [enrollment] = await db.insert(hubEnrollments).values({
+        id: randomUUID(),
+        ...body,
+        status: "Pendente",
+      }).returning();
+      res.status(201).json(enrollment);
+    } catch (err: any) {
+      res.status(400).json({ message: err.message });
+    }
+  });
+
+  // ── Perfil do aluno logado ─────────────────────────────────────────────────
+  app.get("/api/hub/me", requireHubStudent, async (req, res) => {
+    const userId = (req.user as any).id;
+    try {
+      const [profile] = await db.select().from(studentProfiles).where(eq(studentProfiles.userId, userId));
+      const [enrollment] = await db.select().from(studentEnrollments).where(eq(studentEnrollments.studentId, userId));
+      res.json({ profile: profile ?? null, enrollment: enrollment ?? null });
+    } catch (err: any) {
+      res.status(500).json({ message: err.message });
+    }
+  });
+
+  app.get("/api/hub/me/messages", requireHubStudent, async (req, res) => {
+    const userId = (req.user as any).id;
+    const rows = await db.select().from(studentMessages).where(eq(studentMessages.studentId, userId));
+    res.json(rows);
+  });
+
+  app.get("/api/hub/me/invoices", requireHubStudent, async (req, res) => {
+    const userId = (req.user as any).id;
+    const rows = await db.select().from(studentInvoices).where(eq(studentInvoices.studentId, userId));
+    res.json(rows);
+  });
+
+  app.get("/api/hub/me/agenda", requireHubStudent, async (req, res) => {
+    const userId = (req.user as any).id;
+    const rows = await db.select().from(studentAgenda).where(eq(studentAgenda.studentId, userId));
+    res.json(rows);
+  });
+
+  app.get("/api/hub/me/support", requireHubStudent, async (req, res) => {
+    const userId = (req.user as any).id;
+    const rows = await db.select().from(studentSupport).where(eq(studentSupport.studentId, userId));
+    res.json(rows);
+  });
+
+  app.post("/api/hub/me/support", requireHubStudent, async (req, res) => {
+    try {
+      const userId = (req.user as any).id;
+      const body = z.object({
+        subject: z.string().min(1),
+        message: z.string().min(1),
+        email: z.string().email().optional(),
+        name: z.string().optional(),
+      }).parse(req.body);
+      const [ticket] = await db.insert(studentSupport).values({
+        id: randomUUID(),
+        studentId: userId,
+        ...body,
+        status: "Aberto",
+      }).returning();
+      res.status(201).json(ticket);
+    } catch (err: any) {
+      res.status(400).json({ message: err.message });
+    }
+  });
+
+  app.patch("/api/hub/me/messages/:id/read", requireHubStudent, async (req, res) => {
+    await db.update(studentMessages).set({ read: true }).where(eq(studentMessages.id, req.params.id));
+    res.json({ ok: true });
+  });
+
+  // ── Admin: alunos ──────────────────────────────────────────────────────────
+
+  // Alunos = users cujo role normalizado é "dublador" (cobre aliases: user, student, aluno, etc.)
+  app.get("/api/hub/admin/students", requireHubAdmin, async (_req, res) => {
+    const allUsers = await db.select().from(users);
+    const profiles = await db.select().from(studentProfiles);
+    const profileMap = Object.fromEntries(profiles.map(p => [p.userId, p]));
+    const students = allUsers
+      .filter(u => normalizePlatformRole(u.role) === "dublador")
+      .map(u => {
+        const { passwordHash, ...safe } = u as any;
+        const profile = profileMap[u.id] ?? {};
+        return {
+          ...safe,
+          full_name: (profile as any).fullName ?? u.fullName ?? u.displayName ?? u.email,
+          avatar_url: (profile as any).avatarUrl ?? u.avatarUrl ?? null,
+          phone: (profile as any).phone ?? (u as any).phone ?? null,
+        };
+      });
+    res.json(students);
+  });
+
+  // Retorna usuários com role=diretor
+  app.get("/api/hub/admin/diretores", requireHubAdmin, async (_req, res) => {
+    const allUsers = await db.select().from(users);
+    const diretores = allUsers
+      .filter(u => normalizePlatformRole(u.role) === "diretor")
+      .map(u => { const { passwordHash, ...safe } = u as any; return safe; });
+    res.json(diretores);
+  });
+
+  // Retorna usuarios com role platform_owner ou studio_admin (exclui diretores)
+  app.get("/api/hub/admin/directors", requireHubAdmin, async (_req, res) => {
+    const allUsers = await db.select().from(users);
+    const others = allUsers
+      .filter(u => ["platform_owner", "studio_admin"].includes(normalizePlatformRole(u.role)))
+      .map(u => { const { passwordHash, ...safe } = u as any; return safe; });
+    res.json(others);
+  });
+
+  // Busca usuários por email (para adicionar diretor)
+  app.get("/api/hub/admin/users/search", requireHubAdmin, async (req, res) => {
+    const email = (req.query.email as string || "").toLowerCase().trim();
+    if (!email) return res.json([]);
+    const allUsers = await db.select().from(users);
+    const results = allUsers
+      .filter(u => u.email?.toLowerCase().includes(email))
+      .slice(0, 10)
+      .map(u => { const { passwordHash, ...safe } = u as any; return safe; });
+    res.json(results);
+  });
+
+  // Muda o role (e opcionalmente status) de um usuário (platform_owner apenas)
+  app.patch("/api/hub/admin/users/:uid/role", requireHubAdmin, async (req, res) => {
+    try {
+      if (normalizePlatformRole((req.user as any)?.role) !== "platform_owner") {
+        return res.status(403).json({ message: "Apenas o platform_owner pode alterar roles" });
+      }
+      const { role, status } = req.body;
+      if (!role) return res.status(400).json({ message: "role é obrigatório" });
+      const update: Record<string, any> = { role };
+      if (status) update.status = status;
+      const [updated] = await db.update(users).set(update).where(eq(users.id, req.params.uid)).returning();
+      if (!updated) return res.status(404).json({ message: "Usuário não encontrado" });
+      const { passwordHash: _ph, ...safe } = updated as any;
+      res.json(safe);
+    } catch (err: any) {
+      res.status(400).json({ message: err.message });
+    }
+  });
+
+  // Cria aluno: cria usuário + student_profile atomicamente
+  app.post("/api/hub/admin/students", requireHubAdmin, async (req, res) => {
+    try {
+      const { full_name, email, password } = req.body;
+      if (!full_name || !email || !password) {
+        return res.status(400).json({ message: "full_name, email e password são obrigatórios" });
+      }
+      const [existing] = await db.select().from(users).where(eq(users.email, email.toLowerCase().trim()));
+      if (existing) return res.status(409).json({ message: "Este email já está em uso" });
+      const [newUser] = await db.insert(users).values({
+        id: randomUUID(),
+        email: email.toLowerCase().trim(),
+        passwordHash: hashPassword(password),
+        fullName: full_name,
+        displayName: full_name,
+        role: "dublador",
+        status: "approved",
+      } as any).returning();
+      await db.insert(studentProfiles).values({
+        id: randomUUID(),
+        userId: newUser.id,
+        fullName: full_name,
+      } as any);
+      const { passwordHash: _ph, ...safeUser } = newUser as any;
+      res.status(201).json(safeUser);
+    } catch (err: any) {
+      res.status(400).json({ message: err.message });
+    }
+  });
+
+  app.get("/api/hub/admin/enrollments", requireHubAdmin, async (_req, res) => {
+    const rows = await db.select().from(hubEnrollments);
+    res.json(rows);
+  });
+
+  app.patch("/api/hub/admin/enrollments/:id", requireHubAdmin, async (req, res) => {
+    try {
+      const [updated] = await db.update(hubEnrollments)
+        .set(req.body)
+        .where(eq(hubEnrollments.id, req.params.id))
+        .returning();
+      res.json(updated);
+    } catch (err: any) {
+      res.status(400).json({ message: err.message });
+    }
+  });
+
+  app.delete("/api/hub/admin/enrollments/:id", requireHubAdmin, async (req, res) => {
+    await db.delete(hubEnrollments).where(eq(hubEnrollments.id, req.params.id));
+    res.json({ ok: true });
+  });
+
+  app.post("/api/hub/admin/messages", requireHubAdmin, async (req, res) => {
+    try {
+      const body = z.object({
+        studentId: z.string(),
+        title: z.string().min(1),
+        body: z.string().min(1),
+      }).parse(req.body);
+      const [msg] = await db.insert(studentMessages).values({ id: randomUUID(), ...body }).returning();
+      res.status(201).json(msg);
+    } catch (err: any) {
+      res.status(400).json({ message: err.message });
+    }
+  });
+
+  app.post("/api/hub/admin/invoices", requireHubAdmin, async (req, res) => {
+    try {
+      const body = z.object({
+        studentId: z.string(),
+        description: z.string(),
+        amount: z.string(),
+        dueDate: z.string().optional(),
+        due_date: z.string().optional(),
+      }).parse(req.body);
+      const { due_date, ...rest } = body;
+      const [inv] = await db.insert(studentInvoices).values({ id: randomUUID(), ...rest, dueDate: rest.dueDate ?? due_date }).returning();
+      res.status(201).json(inv);
+    } catch (err: any) {
+      res.status(400).json({ message: err.message });
+    }
+  });
+
+  app.get("/api/hub/admin/support", requireHubAdmin, async (_req, res) => {
+    const rows = await db.select().from(studentSupport);
+    res.json(rows);
+  });
+
+  app.patch("/api/hub/admin/support/:id", requireHubAdmin, async (req, res) => {
+    try {
+      const adminReply = req.body.adminReply ?? req.body.admin_reply;
+      const [updated] = await db.update(studentSupport)
+        .set({ adminReply, status: req.body.status ?? "Respondido", updatedAt: new Date() })
+        .where(eq(studentSupport.id, req.params.id))
+        .returning();
+      res.json(updated);
+    } catch (err: any) {
+      res.status(400).json({ message: err.message });
+    }
+  });
+
+  // ── Admin: per-student data ────────────────────────────────────────────────
+
+  app.get("/api/hub/admin/students/:uid/messages", requireHubAdmin, async (req, res) => {
+    const rows = await db.select().from(studentMessages).where(eq(studentMessages.studentId, req.params.uid));
+    res.json(rows);
+  });
+
+  app.delete("/api/hub/admin/messages/:id", requireHubAdmin, async (req, res) => {
+    await db.delete(studentMessages).where(eq(studentMessages.id, req.params.id));
+    res.json({ ok: true });
+  });
+
+  app.get("/api/hub/admin/students/:uid/invoices", requireHubAdmin, async (req, res) => {
+    const rows = await db.select().from(studentInvoices).where(eq(studentInvoices.studentId, req.params.uid));
+    res.json(rows);
+  });
+
+  app.patch("/api/hub/admin/invoices/:id", requireHubAdmin, async (req, res) => {
+    try {
+      const { id, createdAt, studentId, ...body } = req.body;
+      const [updated] = await db.update(studentInvoices).set(body).where(eq(studentInvoices.id, req.params.id)).returning();
+      res.json(updated);
+    } catch (err: any) {
+      res.status(400).json({ message: err.message });
+    }
+  });
+
+  app.delete("/api/hub/admin/invoices/:id", requireHubAdmin, async (req, res) => {
+    await db.delete(studentInvoices).where(eq(studentInvoices.id, req.params.id));
+    res.json({ ok: true });
+  });
+
+  app.get("/api/hub/admin/students/:uid/enrollment", requireHubAdmin, async (req, res) => {
+    const [enrollment] = await db.select().from(studentEnrollments).where(eq(studentEnrollments.studentId, req.params.uid));
+    res.json(enrollment ?? null);
+  });
+
+  app.post("/api/hub/admin/students/:uid/enrollment", requireHubAdmin, async (req, res) => {
+    try {
+      const uid = req.params.uid;
+      const { module, moduleSlug, status, progress } = req.body;
+      const [existing] = await db.select().from(studentEnrollments).where(eq(studentEnrollments.studentId, uid));
+      if (existing) {
+        const [updated] = await db.update(studentEnrollments)
+          .set({ module, moduleSlug, status: status ?? "Ativo", progress: progress ?? existing.progress, updatedAt: new Date() })
+          .where(eq(studentEnrollments.studentId, uid))
+          .returning();
+        res.json(updated);
+      } else {
+        const [created] = await db.insert(studentEnrollments)
+          .values({ id: randomUUID(), studentId: uid, module, moduleSlug, status: status ?? "Ativo", progress: progress ?? 0 })
+          .returning();
+        res.status(201).json(created);
+      }
+    } catch (err: any) {
+      res.status(400).json({ message: err.message });
+    }
+  });
+
+  app.get("/api/hub/admin/students/:uid/agenda", requireHubAdmin, async (req, res) => {
+    const rows = await db.select().from(studentAgenda).where(eq(studentAgenda.studentId, req.params.uid));
+    res.json(rows);
+  });
+
+  app.post("/api/hub/admin/students/:uid/agenda", requireHubAdmin, async (req, res) => {
+    try {
+      const { title, date, time, description, type } = req.body;
+      const [item] = await db.insert(studentAgenda)
+        .values({ id: randomUUID(), studentId: req.params.uid, title, date, time, description, type: type ?? "Aula" })
+        .returning();
+      res.status(201).json(item);
+    } catch (err: any) {
+      res.status(400).json({ message: err.message });
+    }
+  });
+
+  app.delete("/api/hub/admin/agenda/:id", requireHubAdmin, async (req, res) => {
+    await db.delete(studentAgenda).where(eq(studentAgenda.id, req.params.id));
+    res.json({ ok: true });
+  });
+
+  app.get("/api/hub/admin/students/:uid/support", requireHubAdmin, async (req, res) => {
+    const rows = await db.select().from(studentSupport).where(eq(studentSupport.studentId, req.params.uid));
+    res.json(rows);
+  });
+
+  app.delete("/api/hub/admin/students/:uid", requireHubAdmin, async (req, res) => {
+    try {
+      // Demote dublador → user + status pending (inativo), preserva conta Estudio
+      await db.update(users).set({ role: "user", status: "pending" } as any).where(eq(users.id, req.params.uid));
+      await db.delete(studentProfiles).where(eq(studentProfiles.userId, req.params.uid));
+      res.json({ ok: true });
+    } catch (err: any) {
+      res.status(400).json({ message: err.message });
+    }
+  });
+
+  // ── Admin: conteúdo do site ─────────────────────────────────────────────────
+  app.get("/api/hub/admin/settings", requireHubAdmin, async (_req, res) => {
+    const [row] = await db.select().from(hubSettings);
+    res.json(row?.data ?? {});
+  });
+
+  app.put("/api/hub/admin/settings", requireHubAdmin, async (req, res) => {
+    await db.insert(hubSettings).values({ id: "global", data: req.body })
+      .onConflictDoUpdate({ target: hubSettings.id, set: { data: req.body } });
+    res.json({ ok: true });
+  });
+
+  // Banners
+  app.get("/api/hub/admin/banners", requireHubAdmin, async (_req, res) => res.json(await db.select().from(hubBanners)));
+  app.post("/api/hub/admin/banners", requireHubAdmin, async (req, res) => {
+    const { id, createdAt, ...body } = req.body;
+    const [row] = await db.insert(hubBanners).values(body).returning();
+    res.status(201).json(row);
+  });
+  app.patch("/api/hub/admin/banners/:id", requireHubAdmin, async (req, res) => {
+    const { id, createdAt, ...body } = req.body;
+    const [row] = await db.update(hubBanners).set(body).where(eq(hubBanners.id, Number(req.params.id))).returning();
+    res.json(row);
+  });
+  app.delete("/api/hub/admin/banners/:id", requireHubAdmin, async (req, res) => {
+    await db.delete(hubBanners).where(eq(hubBanners.id, Number(req.params.id)));
+    res.json({ ok: true });
+  });
+
+  // Módulos
+  app.get("/api/hub/admin/modules", requireHubAdmin, async (_req, res) => res.json(await db.select().from(hubModules)));
+  app.post("/api/hub/admin/modules", requireHubAdmin, async (req, res) => {
+    const { id, createdAt, ...body } = req.body;
+    const [row] = await db.insert(hubModules).values(body).returning();
+    res.status(201).json(row);
+  });
+  app.patch("/api/hub/admin/modules/:id", requireHubAdmin, async (req, res) => {
+    const { id, createdAt, ...body } = req.body;
+    const [row] = await db.update(hubModules).set(body).where(eq(hubModules.id, Number(req.params.id))).returning();
+    res.json(row);
+  });
+  app.delete("/api/hub/admin/modules/:id", requireHubAdmin, async (req, res) => {
+    await db.delete(hubModules).where(eq(hubModules.id, Number(req.params.id)));
+    res.json({ ok: true });
+  });
+
+  // Professores
+  app.get("/api/hub/admin/teachers", requireHubAdmin, async (_req, res) => res.json(await db.select().from(hubTeachers)));
+  app.post("/api/hub/admin/teachers", requireHubAdmin, async (req, res) => {
+    const { id, createdAt, ...body } = req.body;
+    const [row] = await db.insert(hubTeachers).values(body).returning();
+    res.status(201).json(row);
+  });
+  app.patch("/api/hub/admin/teachers/:id", requireHubAdmin, async (req, res) => {
+    const { id, createdAt, ...body } = req.body;
+    const [row] = await db.update(hubTeachers).set(body).where(eq(hubTeachers.id, Number(req.params.id))).returning();
+    res.json(row);
+  });
+  app.delete("/api/hub/admin/teachers/:id", requireHubAdmin, async (req, res) => {
+    await db.delete(hubTeachers).where(eq(hubTeachers.id, Number(req.params.id)));
+    res.json({ ok: true });
+  });
+
+  // FAQs
+  app.get("/api/hub/admin/faqs", requireHubAdmin, async (_req, res) => res.json(await db.select().from(hubFaqs)));
+  app.post("/api/hub/admin/faqs", requireHubAdmin, async (req, res) => {
+    const { id, createdAt, ...body } = req.body;
+    const [row] = await db.insert(hubFaqs).values(body).returning();
+    res.status(201).json(row);
+  });
+  app.patch("/api/hub/admin/faqs/:id", requireHubAdmin, async (req, res) => {
+    const { id, createdAt, ...body } = req.body;
+    const [row] = await db.update(hubFaqs).set(body).where(eq(hubFaqs.id, Number(req.params.id))).returning();
+    res.json(row);
+  });
+  app.delete("/api/hub/admin/faqs/:id", requireHubAdmin, async (req, res) => {
+    await db.delete(hubFaqs).where(eq(hubFaqs.id, Number(req.params.id)));
+    res.json({ ok: true });
+  });
+
+  // Depoimentos
+  app.get("/api/hub/admin/testimonials", requireHubAdmin, async (_req, res) => res.json(await db.select().from(hubTestimonials)));
+  app.post("/api/hub/admin/testimonials", requireHubAdmin, async (req, res) => {
+    const { id, createdAt, ...body } = req.body;
+    const [row] = await db.insert(hubTestimonials).values(body).returning();
+    res.status(201).json(row);
+  });
+  app.patch("/api/hub/admin/testimonials/:id", requireHubAdmin, async (req, res) => {
+    const { id, createdAt, ...body } = req.body;
+    const [row] = await db.update(hubTestimonials).set(body).where(eq(hubTestimonials.id, Number(req.params.id))).returning();
+    res.json(row);
+  });
+  app.delete("/api/hub/admin/testimonials/:id", requireHubAdmin, async (req, res) => {
+    await db.delete(hubTestimonials).where(eq(hubTestimonials.id, Number(req.params.id)));
+    res.json({ ok: true });
+  });
+
+  // ── Hub: registro de aluno ──────────────────────────────────────────────────
+  app.post("/api/hub/auth/register", async (req, res) => {
+    try {
+      const body = z.object({
+        email: z.string().email(),
+        password: z.string().min(6),
+        fullName: z.string().min(2),
+        phone: z.string().optional(),
+      }).parse(req.body);
+
+      const existing = await storage.getUserByEmail(body.email);
+      if (existing) return res.status(400).json({ message: "E-mail já cadastrado" });
+
+      const { hashPassword } = await import("./replit_integrations/auth/replitAuth");
+      const { authStorage } = await import("./replit_integrations/auth/storage");
+      const newUser = await authStorage.createUser({
+        email: body.email,
+        passwordHash: hashPassword(body.password),
+        fullName: body.fullName,
+        displayName: body.fullName,
+        role: "student",
+        status: "approved",
+      });
+
+      await db.insert(studentProfiles).values({
+        id: randomUUID(),
+        userId: newUser.id,
+        fullName: body.fullName,
+        email: body.email,
+        phone: body.phone ?? "",
+        role: "student",
+        status: "Ativo",
+      });
+
+      res.status(201).json({ id: newUser.id, email: newUser.email, fullName: body.fullName });
+    } catch (err: any) {
+      res.status(400).json({ message: err.message });
     }
   });
 

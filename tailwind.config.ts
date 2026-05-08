@@ -86,6 +86,9 @@ export default {
         sans: ["var(--font-sans)"],
         serif: ["var(--font-serif)"],
         mono: ["var(--font-mono)"],
+        poppins: ["Poppins", "ui-sans-serif", "system-ui", "sans-serif"],
+        rubik: ["Rubik", "ui-sans-serif", "system-ui", "sans-serif"],
+        display: ["Poppins", "ui-sans-serif", "system-ui", "sans-serif"],
       },
       keyframes: {
         "accordion-down": {

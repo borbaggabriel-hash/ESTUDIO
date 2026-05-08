@@ -40,7 +40,7 @@ const HubSchoolCourse = lazyWithRetry(() => import("@/pages/hubschool-course"));
 const HubAlign = lazyWithRetry(() => import("@/pages/hub-align"));
 
 // Studio Pages (imported from the HUBDUB-STUDIO folder)
-const Login = lazyWithRetry(() => import("@studio/pages/login"));
+const Login = lazyWithRetry(() => import("@studio/pages/logindesativado"));
 const StudioSelect = lazyWithRetry(() => import("@studio/pages/studio-select"));
 const Dashboard = lazyWithRetry(() => import("@studio/pages/dashboard"));
 const Productions = lazyWithRetry(() => import("@studio/pages/productions"));
@@ -54,6 +54,8 @@ const StudioAdmin = lazyWithRetry(() => import("@studio/pages/studio-admin"));
 const Takes = lazyWithRetry(() => import("@studio/pages/takes"));
 const Profile = lazyWithRetry(() => import("@studio/pages/profile"));
 const Daw = lazyWithRetry(() => import("@studio/pages/daw"));
+
+const SecretariaApp = lazyWithRetry(() => import("@secretaria/App").then(m => ({ default: m.SecretariaApp })));
 
 import { StudioLayout } from "@studio/components/layout/studio-layout";
 
@@ -101,8 +103,11 @@ function Router() {
     }>
       <AnimatePresence mode="wait">
         <Switch location={location} key={location}>
+          {/* Secretaria — landing page principal */}
           <Route path="/">
-            <Redirect to="/hub-dub" replace />
+            <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} className="w-full">
+              <SecretariaApp />
+            </motion.div>
           </Route>
 
           {/* HUBDUB-STUDIO Fusion Routes */}

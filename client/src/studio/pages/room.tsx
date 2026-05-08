@@ -30,6 +30,7 @@ import {
   Maximize2,
   Minimize2,
   GripHorizontal,
+  Clock,
 } from "lucide-react";
 import { useToast } from "@studio/hooks/use-toast";
 import { useAuth } from "@studio/hooks/use-auth";
@@ -476,6 +477,111 @@ function RecordingProfilePanel({
   );
 }
 
+// ── DraggableTimecode ─────────────────────────────────────────────────────────
+// Draggable + resizable timecode overlay. Position stored as % of parent container.
+// All position/size updates go straight to the DOM — zero React re-renders during drag.
+function DraggableTimecode({ videoRef, visible }: {
+  videoRef: React.RefObject<HTMLVideoElement | null>;
+  visible: boolean;
+}) {
+  const wrapRef  = useRef<HTMLDivElement>(null);
+  const spanRef  = useRef<HTMLSpanElement>(null);
+  const posRef   = useRef({ x: 50, y: 82 }); // % within parent, initial: bottom-centre
+  const fontRef  = useRef(48);               // px, matches former text-5xl
+  const dragRef  = useRef<{ startX: number; startY: number; origX: number; origY: number } | null>(null);
+  const resizeRef = useRef<{ startX: number; startY: number; origFont: number } | null>(null);
+
+  const applyStyle = useCallback(() => {
+    const el = wrapRef.current;
+    if (!el) return;
+    el.style.left = `${posRef.current.x}%`;
+    el.style.top  = `${posRef.current.y}%`;
+    if (spanRef.current) spanRef.current.style.fontSize = `${fontRef.current}px`;
+  }, []);
+
+  useEffect(() => { applyStyle(); }, [applyStyle]);
+
+  // RAF timecode — reads video directly, no React state
+  useEffect(() => {
+    let raf: number;
+    const tick = () => {
+      const t = videoRef.current?.currentTime ?? 0;
+      if (spanRef.current) spanRef.current.textContent = formatTimecode(t);
+      raf = requestAnimationFrame(tick);
+    };
+    raf = requestAnimationFrame(tick);
+    return () => cancelAnimationFrame(raf);
+  }, [videoRef]);
+
+  // ── Drag ────────────────────────────────────────────────────────────────────
+  const onDragDown = useCallback((e: React.PointerEvent<HTMLDivElement>) => {
+    e.stopPropagation();
+    e.currentTarget.setPointerCapture(e.pointerId);
+    dragRef.current = { startX: e.clientX, startY: e.clientY, origX: posRef.current.x, origY: posRef.current.y };
+  }, []);
+
+  const onDragMove = useCallback((e: React.PointerEvent<HTMLDivElement>) => {
+    if (!dragRef.current) return;
+    const parent = wrapRef.current?.parentElement;
+    if (!parent) return;
+    const { width, height } = parent.getBoundingClientRect();
+    posRef.current = {
+      x: Math.max(0, Math.min(100, dragRef.current.origX + ((e.clientX - dragRef.current.startX) / width)  * 100)),
+      y: Math.max(0, Math.min(100, dragRef.current.origY + ((e.clientY - dragRef.current.startY) / height) * 100)),
+    };
+    applyStyle();
+  }, [applyStyle]);
+
+  const onDragUp = useCallback(() => { dragRef.current = null; }, []);
+
+  // ── Resize ──────────────────────────────────────────────────────────────────
+  const onResizeDown = useCallback((e: React.PointerEvent<HTMLDivElement>) => {
+    e.stopPropagation();
+    e.currentTarget.setPointerCapture(e.pointerId);
+    resizeRef.current = { startX: e.clientX, startY: e.clientY, origFont: fontRef.current };
+  }, []);
+
+  const onResizeMove = useCallback((e: React.PointerEvent<HTMLDivElement>) => {
+    if (!resizeRef.current) return;
+    const delta = (e.clientX - resizeRef.current.startX) + (e.clientY - resizeRef.current.startY);
+    fontRef.current = Math.max(16, Math.min(120, resizeRef.current.origFont + delta * 0.4));
+    applyStyle();
+  }, [applyStyle]);
+
+  const onResizeUp = useCallback(() => { resizeRef.current = null; }, []);
+
+  if (!visible) return null;
+
+  return (
+    <div
+      ref={wrapRef}
+      style={{ position: 'absolute', zIndex: 30, transform: 'translate(-50%, -50%)', cursor: 'grab', userSelect: 'none', touchAction: 'none' }}
+      onPointerDown={onDragDown}
+      onPointerMove={onDragMove}
+      onPointerUp={onDragUp}
+    >
+      <span
+        ref={spanRef}
+        className="font-mono font-bold px-4 py-1 rounded-lg"
+        style={{ background: '#000000', color: '#ffffff', letterSpacing: '0.06em', display: 'block', whiteSpace: 'nowrap', pointerEvents: 'none' }}
+      >
+        00:00:00
+      </span>
+      {/* Resize handle — bottom-right corner */}
+      <div
+        style={{ position: 'absolute', bottom: 0, right: 0, width: 18, height: 18, cursor: 'nwse-resize', zIndex: 1, touchAction: 'none' }}
+        onPointerDown={onResizeDown}
+        onPointerMove={onResizeMove}
+        onPointerUp={onResizeUp}
+      >
+        <svg width="10" height="10" viewBox="0 0 10 10" style={{ position: 'absolute', bottom: 2, right: 2, opacity: 0.55 }}>
+          <path d="M9 1 1 9M9 5 5 9M9 9 9 9" stroke="white" strokeWidth="1.5" strokeLinecap="round"/>
+        </svg>
+      </div>
+    </div>
+  );
+}
+
 export default function RecordingRoom() {
   const { studioId, sessionId } = useParams<{ studioId: string; sessionId: string }>();
   const { toast } = useToast();
@@ -532,6 +638,7 @@ export default function RecordingRoom() {
   const [deviceSettingsOpen, setDeviceSettingsOpen] = useState(false);
   const [videoFloating, setVideoFloating] = useState(false);
   const [scriptFloating, setScriptFloating] = useState(false);
+  const [timecodeVisible, setTimecodeVisible] = useState(true);
   const [deviceSettings, setDeviceSettings] = useState<DeviceSettings>(() => {
     const defaults: DeviceSettings = { inputDeviceId: "", outputDeviceId: "", inputGain: 1, monitorVolume: 0.8, voiceCaptureMode: "original" };
     try {
@@ -3280,6 +3387,17 @@ export default function RecordingRoom() {
             <Settings className="w-3.5 h-3.5" />
             <span className="hidden sm:inline">Atalhos</span>
           </button>
+          <div className="hidden sm:block w-px h-4" style={{ background: "hsl(var(--border))" }} />
+          <button
+            onClick={() => setTimecodeVisible(v => !v)}
+            className="flex items-center gap-1.5 transition-colors"
+            style={{ color: timecodeVisible ? "hsl(var(--foreground) / 0.85)" : "hsl(var(--muted-foreground) / 0.35)" }}
+            title={timecodeVisible ? "Ocultar timecode" : "Mostrar timecode"}
+            data-testid="button-toggle-timecode"
+          >
+            <Clock className="w-3.5 h-3.5" />
+            <span className="hidden sm:inline">Timecode</span>
+          </button>
           </div>
         </div>
       </header>
@@ -3339,6 +3457,9 @@ export default function RecordingRoom() {
                 >
                   {isMuted ? <VolumeX className="w-4 h-4" /> : <Volume2 className="w-4 h-4" />}
                 </button>
+
+                {/* Timecode HH:MM:SS — draggable, resizable */}
+                <DraggableTimecode videoRef={videoRef} visible={timecodeVisible && videoDuration > 0} />
 
                 {/* Landscape floating recording controls */}
                 {isLandscapeMobile && (
@@ -3433,6 +3554,8 @@ export default function RecordingRoom() {
                 >
                   {isMuted ? <VolumeX className="w-3.5 h-3.5" /> : <Volume2 className="w-3.5 h-3.5" />}
                 </button>
+                {/* Timecode HH:MM:SS — PIP draggable, resizable */}
+                <DraggableTimecode videoRef={videoRef} visible={timecodeVisible && videoDuration > 0} />
               </div>
             </FloatingPanel>
           )}

@@ -107,7 +107,7 @@ export function useAuth() {
       writeCachedUser(null);
       queryClient.setQueryData(["/api/auth/user"], null);
       queryClient.clear();
-      navigate("/hub-dub/login", { replace: true });
+      navigate("/", { replace: true });
     },
   });
 

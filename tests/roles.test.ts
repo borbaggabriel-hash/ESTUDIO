@@ -43,3 +43,7 @@ test("isPrivilegedStudioRole matches privileged roles", () => {
   assert.equal(isPrivilegedStudioRole("diretor"), true);
   assert.equal(isPrivilegedStudioRole("platform_owner"), true);
 });
+
+test("hub_admin normalizes to platform_owner (role unification)", () => {
+  assert.equal(normalizePlatformRole("hub_admin"), "platform_owner");
+});

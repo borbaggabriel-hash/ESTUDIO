@@ -258,3 +258,157 @@ export type SessionParticipant = typeof sessionParticipants.$inferSelect;
 export type AuditLog = typeof auditLog.$inferSelect;
 export type Staff = typeof staff.$inferSelect;
 export type UserStudioRole = typeof userStudioRoles.$inferSelect;
+
+// ── THE HUB (SECRETARIA) ─────────────────────────────────────────────────────
+
+export const hubBanners = pgTable("hub_banners", {
+  id: integer("id").primaryKey().generatedAlwaysAsIdentity(),
+  title: text("title"),
+  subtitle: text("subtitle"),
+  description: text("description"),
+  imageUrl: text("image_url"),
+  ctaText: text("cta_text"),
+  ctaUrl: text("cta_url"),
+});
+
+export const hubModules = pgTable("hub_modules", {
+  id: integer("id").primaryKey().generatedAlwaysAsIdentity(),
+  num: text("num"),
+  slug: text("slug"),
+  title: text("title"),
+  teacher: text("teacher"),
+  duration: text("duration"),
+  desc: text("desc"),
+  icon: text("icon"),
+  details: jsonb("details"),
+});
+
+export const hubTeachers = pgTable("hub_teachers", {
+  id: integer("id").primaryKey().generatedAlwaysAsIdentity(),
+  name: text("name"),
+  role: text("role"),
+  photo: text("photo"),
+  bio: text("bio"),
+  specialties: jsonb("specialties"),
+});
+
+export const hubLearnings = pgTable("hub_learnings", {
+  id: integer("id").primaryKey().generatedAlwaysAsIdentity(),
+  title: text("title"),
+  description: text("description"),
+  moduleSlug: text("module_slug"),
+});
+
+export const hubTestimonials = pgTable("hub_testimonials", {
+  id: integer("id").primaryKey().generatedAlwaysAsIdentity(),
+  name: text("name"),
+  role: text("role"),
+  text: text("text"),
+  avatar: text("avatar"),
+});
+
+export const hubFaqs = pgTable("hub_faqs", {
+  id: integer("id").primaryKey().generatedAlwaysAsIdentity(),
+  question: text("question"),
+  answer: text("answer"),
+});
+
+export const hubSettings = pgTable("hub_settings", {
+  id: text("id").primaryKey().default("global"),
+  data: jsonb("data").notNull().default({}),
+});
+
+export const hubEnrollments = pgTable("hub_enrollments", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  studentId: varchar("student_id").references(() => users.id, { onDelete: "set null" }),
+  email: text("email"),
+  name: text("name"),
+  phone: text("phone"),
+  module: text("module"),
+  moduleSlug: text("module_slug"),
+  status: text("status").default("Pendente"),
+  progress: integer("progress").default(0),
+  createdAt: timestamp("created_at").defaultNow(),
+});
+
+export const studentProfiles = pgTable("student_profiles", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  userId: varchar("user_id").references(() => users.id, { onDelete: "cascade" }),
+  fullName: text("full_name"),
+  role: text("role").default("student"),
+  avatarUrl: text("avatar_url"),
+  phone: text("phone"),
+  plan: text("plan"),
+  status: text("status").default("Ativo"),
+  email: text("email"),
+  createdAt: timestamp("created_at").defaultNow(),
+});
+
+export const studentEnrollments = pgTable("student_enrollments", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  studentId: varchar("student_id").references(() => users.id, { onDelete: "cascade" }),
+  module: text("module"),
+  moduleSlug: text("module_slug"),
+  status: text("status").default("Ativo"),
+  progress: integer("progress").default(0),
+  updatedAt: timestamp("updated_at").defaultNow(),
+});
+
+export const studentMessages = pgTable("student_messages", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  studentId: varchar("student_id").references(() => users.id, { onDelete: "cascade" }),
+  title: text("title").notNull(),
+  body: text("body").notNull(),
+  read: boolean("read").default(false),
+  createdAt: timestamp("created_at").defaultNow(),
+});
+
+export const studentInvoices = pgTable("student_invoices", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  studentId: varchar("student_id").references(() => users.id, { onDelete: "cascade" }),
+  description: text("description"),
+  amount: text("amount"),
+  dueDate: text("due_date"),
+  status: text("status").default("Pendente"),
+  createdAt: timestamp("created_at").defaultNow(),
+});
+
+export const studentSupport = pgTable("student_support", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  studentId: varchar("student_id").references(() => users.id, { onDelete: "cascade" }),
+  subject: text("subject"),
+  message: text("message"),
+  email: text("email"),
+  name: text("name"),
+  status: text("status").default("Aberto"),
+  adminReply: text("admin_reply").default(""),
+  createdAt: timestamp("created_at").defaultNow(),
+  updatedAt: timestamp("updated_at"),
+});
+
+export const studentAgenda = pgTable("student_agenda", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  studentId: varchar("student_id").references(() => users.id, { onDelete: "cascade" }),
+  title: text("title"),
+  date: text("date"),
+  time: text("time"),
+  description: text("description"),
+  type: text("type").default("Aula"),
+  createdAt: timestamp("created_at").defaultNow(),
+});
+
+export const studentActivity = pgTable("student_activity", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  studentId: varchar("student_id").references(() => users.id, { onDelete: "cascade" }),
+  activityType: text("activity_type"),
+  description: text("description"),
+  createdAt: timestamp("created_at").defaultNow(),
+});
+
+// ── Hub types ──────────────────────────────────────────────────────────────────
+export type HubEnrollment = typeof hubEnrollments.$inferSelect;
+export type StudentProfile = typeof studentProfiles.$inferSelect;
+export type StudentMessage = typeof studentMessages.$inferSelect;
+export type StudentInvoice = typeof studentInvoices.$inferSelect;
+export type StudentSupport = typeof studentSupport.$inferSelect;
+export type StudentAgenda = typeof studentAgenda.$inferSelect;

@@ -11,7 +11,7 @@ import { lazy, Suspense } from "react";
 import { ErrorBoundary } from "@studio/components/ui/error-boundary";
 
 const NotFound = lazy(() => import("@studio/pages/not-found"));
-const Login = lazy(() => import("@studio/pages/login"));
+const Login = lazy(() => import("@studio/pages/logindesativado"));
 const StudioSelect = lazy(() => import("@studio/pages/studio-select"));
 const Dashboard = lazy(() => import("@studio/pages/dashboard"));
 const Productions = lazy(() => import("@studio/pages/productions"));

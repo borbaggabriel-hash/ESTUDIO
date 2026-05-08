@@ -20,6 +20,7 @@ const PLATFORM_ROLE_ALIASES: Record<string, PlatformRole> = {
   platformowner: "platform_owner",
   platform_owner: "platform_owner",
   owner: "platform_owner",
+  hub_admin: "platform_owner",
   studio_admin: "studio_admin",
   studioadmin: "studio_admin",
   diretor: "diretor",
@@ -36,6 +37,7 @@ const PLATFORM_ROLE_ALIASES: Record<string, PlatformRole> = {
 const STUDIO_ROLE_ALIASES: Record<string, StudioRole> = {
   platformowner: "platform_owner",
   platform_owner: "platform_owner",
+  hub_admin: "platform_owner",
   studio_admin: "studio_admin",
   studioadmin: "studio_admin",
   diretor: "diretor",

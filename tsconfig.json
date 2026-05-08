@@ -18,7 +18,8 @@
     "paths": {
       "@/*": ["./client/src/*"],
       "@shared/*": ["./shared/*"],
-      "@studio/*": ["./client/src/studio/*"]
+      "@studio/*": ["./client/src/studio/*"],
+      "@secretaria/*": ["./client/src/secretaria/*"]
     }
   }
 }

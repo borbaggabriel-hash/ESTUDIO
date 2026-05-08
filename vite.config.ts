@@ -25,6 +25,7 @@ export default defineConfig({
       "@shared": path.resolve(import.meta.dirname, "shared"),
       "@assets": path.resolve(import.meta.dirname, "attached_assets"),
       "@studio": path.resolve(import.meta.dirname, "client/src/studio"),
+      "@secretaria": path.resolve(import.meta.dirname, "client/src/secretaria"),
     },
   },
   root: path.resolve(import.meta.dirname, "client"),
