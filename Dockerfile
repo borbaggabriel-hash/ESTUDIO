@@ -7,7 +7,7 @@ COPY package*.json ./
 COPY client/package*.json ./client/
 
 # Install ALL dependencies (dev included) so tsx/vite/esbuild are available
-RUN npm ci
+RUN npm ci --legacy-peer-deps
 
 # Copy source
 COPY . .
@@ -27,7 +27,7 @@ COPY --from=builder /app/package-lock.json ./
 
 # Install all dependencies including devDependencies so drizzle-kit
 # is available for the preDeployCommand ("npm run db:push")
-RUN npm ci
+RUN npm ci --legacy-peer-deps
 
 # Create uploads directory
 RUN mkdir -p /app/public/uploads /app/public/media-jobs /app/public/voice-jobs
