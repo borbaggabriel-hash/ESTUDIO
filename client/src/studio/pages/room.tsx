@@ -31,6 +31,7 @@ import {
   Minimize2,
   GripHorizontal,
   Clock,
+  ExternalLink,
 } from "lucide-react";
 import { useToast } from "@studio/hooks/use-toast";
 import { useAuth } from "@studio/hooks/use-auth";
@@ -582,6 +583,30 @@ function DraggableTimecode({ videoRef, visible }: {
   );
 }
 
+// ── TimecodeDisplay ──────────────────────────────────────────────────────────
+// Minimal timecode for the PiP popup. Uses RAF to read videoRef directly.
+function TimecodeDisplay({ videoRef }: { videoRef: React.RefObject<HTMLVideoElement | null> }) {
+  const spanRef = useRef<HTMLSpanElement>(null);
+  useEffect(() => {
+    let raf: number;
+    const tick = () => {
+      const t = videoRef.current?.currentTime ?? 0;
+      if (spanRef.current) spanRef.current.textContent = formatTimecode(t);
+      raf = requestAnimationFrame(tick);
+    };
+    raf = requestAnimationFrame(tick);
+    return () => cancelAnimationFrame(raf);
+  }, [videoRef]);
+  return (
+    <span
+      ref={spanRef}
+      style={{ fontFamily: "monospace", fontWeight: 700, fontSize: 52, color: "#fff", letterSpacing: "0.05em", lineHeight: 1 }}
+    >
+      00:00:00
+    </span>
+  );
+}
+
 export default function RecordingRoom() {
   const { studioId, sessionId } = useParams<{ studioId: string; sessionId: string }>();
   const { toast } = useToast();
@@ -639,6 +664,7 @@ export default function RecordingRoom() {
   const [videoFloating, setVideoFloating] = useState(false);
   const [scriptFloating, setScriptFloating] = useState(false);
   const [scriptPipWindow, setScriptPipWindow] = useState<Window | null>(null);
+  const [timecodePipWindow, setTimecodePipWindow] = useState<Window | null>(null);
   const [timecodeVisible, setTimecodeVisible] = useState(true);
   const [deviceSettings, setDeviceSettings] = useState<DeviceSettings>(() => {
     const defaults: DeviceSettings = { inputDeviceId: "", outputDeviceId: "", inputGain: 1, monitorVolume: 0.8, voiceCaptureMode: "original" };
@@ -1845,9 +1871,74 @@ export default function RecordingRoom() {
         return;
       } catch {}
     }
-    // Fallback: in-browser FloatingPanel
+    // Fallback: window.open() popup (works in all browsers, real OS window)
+    const sw = window.screen.width, sh = window.screen.height;
+    const pw = 440, ph = 660;
+    const popup = window.open(
+      "about:blank",
+      "hubdub-script-pip",
+      `width=${pw},height=${ph},top=${Math.round((sh - ph) / 2)},left=${Math.round((sw - pw) / 2)},popup=1,noopener=0`
+    );
+    if (!popup) {
+      toast({ title: "Popup bloqueado", description: "Permita popups neste site para destacar o roteiro.", variant: "destructive" });
+      return;
+    }
+    document.querySelectorAll('link[rel="stylesheet"], style').forEach(el => {
+      try { popup.document.head.appendChild(el.cloneNode(true)); } catch {}
+    });
+    popup.document.documentElement.className = document.documentElement.className;
+    popup.document.body.style.cssText = "margin:0;padding:0;height:100%;overflow:hidden;";
+    popup.document.title = "Roteiro — HubDub";
+    popup.addEventListener("beforeunload", () => {
+      setScriptFloating(false);
+      setScriptPipWindow(null);
+    });
+    setScriptPipWindow(popup);
     setScriptFloating(true);
-  }, [scriptFloating, scriptPipWindow]);
+  }, [scriptFloating, scriptPipWindow, toast]);
+
+  const toggleTimecodePip = useCallback(async () => {
+    if (timecodePipWindow && !timecodePipWindow.closed) {
+      timecodePipWindow.close();
+      setTimecodePipWindow(null);
+      return;
+    }
+    const pw = 300, ph = 96;
+    const sw = window.screen.width, sh = window.screen.height;
+    // Try Document PiP first (Chrome 116+)
+    if ("documentPictureInPicture" in window) {
+      try {
+        // @ts-ignore
+        const pipWin: Window = await (window as any).documentPictureInPicture.requestWindow({ width: pw, height: ph });
+        document.querySelectorAll('link[rel="stylesheet"], style').forEach(el => {
+          try { pipWin.document.head.appendChild(el.cloneNode(true)); } catch {}
+        });
+        pipWin.document.documentElement.className = document.documentElement.className;
+        pipWin.document.body.style.cssText = "margin:0;padding:0;height:100%;overflow:hidden;background:#000;";
+        pipWin.addEventListener("pagehide", () => setTimecodePipWindow(null));
+        setTimecodePipWindow(pipWin);
+        return;
+      } catch {}
+    }
+    // Fallback: popup window
+    const popup = window.open(
+      "about:blank",
+      "hubdub-timecode-pip",
+      `width=${pw},height=${ph},top=${Math.round((sh - ph) / 2)},left=${Math.round((sw - pw) / 2)},popup=1,noopener=0`
+    );
+    if (!popup) {
+      toast({ title: "Popup bloqueado", description: "Permita popups para destacar o timecode.", variant: "destructive" });
+      return;
+    }
+    document.querySelectorAll('link[rel="stylesheet"], style').forEach(el => {
+      try { popup.document.head.appendChild(el.cloneNode(true)); } catch {}
+    });
+    popup.document.documentElement.className = document.documentElement.className;
+    popup.document.body.style.cssText = "margin:0;padding:0;height:100%;overflow:hidden;background:#000;";
+    popup.document.title = "Timecode — HubDub";
+    popup.addEventListener("beforeunload", () => setTimecodePipWindow(null));
+    setTimecodePipWindow(popup);
+  }, [timecodePipWindow, toast]);
 
   useEffect(() => {
     const viewport = scriptViewportRef.current;
@@ -3448,9 +3539,30 @@ export default function RecordingRoom() {
             <Clock className="w-3.5 h-3.5" />
             <span className="hidden sm:inline">Timecode</span>
           </button>
+          <button
+            onClick={() => toggleTimecodePip()}
+            className="flex items-center gap-1 transition-colors"
+            style={{ color: timecodePipWindow && !timecodePipWindow.closed ? "hsl(var(--primary))" : "hsl(var(--muted-foreground) / 0.5)", padding: "2px 4px", borderRadius: 4 }}
+            title={timecodePipWindow && !timecodePipWindow.closed ? "Fechar timecode PiP" : "Timecode em janela flutuante"}
+            data-testid="button-timecode-pip"
+          >
+            <ExternalLink className="w-3 h-3" />
+          </button>
           </div>
         </div>
       </header>
+      {/* Timecode PiP portal — renders into OS-level floating window */}
+      {timecodePipWindow && !timecodePipWindow.closed && createPortal(
+        <div style={{ width: "100%", height: "100%", display: "flex", alignItems: "center", justifyContent: "center", background: "#000", position: "relative", userSelect: "none" }}>
+          <TimecodeDisplay videoRef={videoRef} />
+          <button
+            onClick={() => toggleTimecodePip()}
+            style={{ position: "absolute", top: 4, right: 6, background: "transparent", border: "none", color: "rgba(255,255,255,0.3)", cursor: "pointer", fontSize: 14, lineHeight: 1, padding: 2 }}
+            title="Fechar"
+          >×</button>
+        </div>,
+        timecodePipWindow.document.body
+      )}
 
       <div ref={splitContainerRef} className="flex-1 flex overflow-hidden" style={{ flexDirection: isMobile ? 'column' : 'row' }}>
         <div className="flex flex-col" style={isMobile
@@ -3491,9 +3603,12 @@ export default function RecordingRoom() {
                 <p className="text-xs">Nenhum video anexado a esta producao</p>
               </div>
             )}
+            {/* Timecode HH:MM:SS — always rendered; videoRef still works in native PiP */}
+            <DraggableTimecode videoRef={videoRef} visible={timecodeVisible && videoDuration > 0} />
+
             {/* PiP active overlay */}
             {videoFloating && (
-              <div className="absolute inset-0 flex flex-col items-center justify-center gap-2" style={{ background: "rgba(10,10,14,0.85)", color: "rgba(255,255,255,0.4)", zIndex: 2 }}>
+              <div className="absolute inset-0 flex flex-col items-center justify-center gap-2" style={{ background: "rgba(10,10,14,0.75)", color: "rgba(255,255,255,0.4)", zIndex: 2 }}>
                 <Maximize2 className="w-6 h-6" />
                 <p className="text-xs">Vídeo em PiP</p>
                 <p className="text-[10px]" style={{ color: "rgba(255,255,255,0.25)" }}>Duplo clique para recolher</p>
@@ -3508,9 +3623,6 @@ export default function RecordingRoom() {
                 >
                   {isMuted ? <VolumeX className="w-4 h-4" /> : <Volume2 className="w-4 h-4" />}
                 </button>
-
-                {/* Timecode HH:MM:SS — draggable, resizable */}
-                <DraggableTimecode videoRef={videoRef} visible={timecodeVisible && videoDuration > 0} />
 
                 {/* Landscape floating recording controls */}
                 {isLandscapeMobile && (
