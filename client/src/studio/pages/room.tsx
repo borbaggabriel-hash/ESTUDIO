@@ -638,6 +638,7 @@ export default function RecordingRoom() {
   const [deviceSettingsOpen, setDeviceSettingsOpen] = useState(false);
   const [videoFloating, setVideoFloating] = useState(false);
   const [scriptFloating, setScriptFloating] = useState(false);
+  const [scriptPipWindow, setScriptPipWindow] = useState<Window | null>(null);
   const [timecodeVisible, setTimecodeVisible] = useState(true);
   const [deviceSettings, setDeviceSettings] = useState<DeviceSettings>(() => {
     const defaults: DeviceSettings = { inputDeviceId: "", outputDeviceId: "", inputGain: 1, monitorVolume: 0.8, voiceCaptureMode: "original" };
@@ -700,8 +701,9 @@ export default function RecordingRoom() {
         }
       });
 
-      const sorted = [...normalized]
-        .sort((a, b) => a.start - b.start);
+      const sorted = normalized
+        .map((line, origIdx) => ({ ...line, _origIdx: origIdx }))
+        .sort((a, b) => a.start !== b.start ? a.start - b.start : a._origIdx - b._origIdx);
       return sorted.map((line, i) => ({
         ...line,
         end: Math.max(sorted[i + 1]?.start ?? (line.start + 10), line.start + 0.001),
@@ -1610,7 +1612,7 @@ export default function RecordingRoom() {
       const idx = scriptLines.findIndex(
         (line) => t >= line.start && t < (line.end ?? line.start + 1)
       );
-      if (idx !== -1 && idx !== currentLine) {
+      if (idx !== -1 && idx !== currentLine && scriptAutoFollowRef.current) {
         setCurrentLine(idx);
       }
 
@@ -1676,9 +1678,6 @@ export default function RecordingRoom() {
 
   const handleScriptViewportScroll = useCallback(() => {
     if (scriptProgrammaticScrollRef.current) return;
-    if (!scriptUserScrollIntentRef.current) return;
-    if (!scriptAutoFollowRef.current) return;
-    setScriptAutoFollow(false);
   }, []);
 
   useEffect(() => { splitRatioRef.current = splitRatio; }, [splitRatio]);
@@ -1796,6 +1795,59 @@ export default function RecordingRoom() {
       scriptProgrammaticScrollRef.current = false;
     });
   }, []);
+
+  // ── Video native PiP: sync state when user closes via browser controls ─────
+  useEffect(() => {
+    const video = videoRef.current;
+    if (!video) return;
+    const onLeave = () => setVideoFloating(false);
+    video.addEventListener("leavepictureinpicture", onLeave);
+    return () => video.removeEventListener("leavepictureinpicture", onLeave);
+  }, []);
+
+  const toggleVideoFloat = useCallback(async () => {
+    const video = videoRef.current;
+    if (!video || !production?.videoUrl) return;
+    if (videoFloating) {
+      try { if (document.pictureInPictureElement) await document.exitPictureInPicture(); } catch {}
+      setVideoFloating(false);
+    } else {
+      if (document.pictureInPictureEnabled && "requestPictureInPicture" in video) {
+        try { await (video as any).requestPictureInPicture(); setVideoFloating(true); } catch {}
+      }
+    }
+  }, [videoFloating, production?.videoUrl]);
+
+  const toggleScriptFloat = useCallback(async () => {
+    if (scriptFloating) {
+      if (scriptPipWindow && !scriptPipWindow.closed) scriptPipWindow.close();
+      setScriptFloating(false);
+      setScriptPipWindow(null);
+      return;
+    }
+    // Try Document PiP (Chrome 116+)
+    if ("documentPictureInPicture" in window) {
+      try {
+        // @ts-ignore
+        const pipWin: Window = await (window as any).documentPictureInPicture.requestWindow({ width: 440, height: 660 });
+        // Copy stylesheets into PiP window
+        document.querySelectorAll('link[rel="stylesheet"], style').forEach(el => {
+          try { pipWin.document.head.appendChild(el.cloneNode(true)); } catch {}
+        });
+        pipWin.document.documentElement.className = document.documentElement.className;
+        pipWin.document.body.style.cssText = "margin:0;padding:0;height:100%;overflow:hidden;";
+        pipWin.addEventListener("pagehide", () => {
+          setScriptFloating(false);
+          setScriptPipWindow(null);
+        });
+        setScriptPipWindow(pipWin);
+        setScriptFloating(true);
+        return;
+      } catch {}
+    }
+    // Fallback: in-browser FloatingPanel
+    setScriptFloating(true);
+  }, [scriptFloating, scriptPipWindow]);
 
   useEffect(() => {
     const viewport = scriptViewportRef.current;
@@ -1966,7 +2018,6 @@ export default function RecordingRoom() {
 
   const playVideo = useCallback(() => {
     if (!videoRef.current) return;
-    setScriptAutoFollow(true);
     videoRef.current.play().catch(() => {});
     setIsPlaying(true);
     emitVideoEvent("video-play", { currentTime: videoRef.current.currentTime });
@@ -2035,7 +2086,6 @@ export default function RecordingRoom() {
     if (!canTextControl) return;
     const line = scriptLines[idx];
     if (!line) return;
-    setScriptAutoFollow(true);
     queueMicrotask(() => scrollScriptToLine(idx, "smooth"));
 
     if (loopSelectionMode === "selecting-start") {
@@ -3410,46 +3460,47 @@ export default function RecordingRoom() {
           <div
             className="flex-1 relative overflow-hidden"
             style={{ minHeight: (isMobile || isLandscapeMobile) ? 0 : 240, background: "rgb(10,10,14)", border: "1px solid rgba(0,0,0,0.15)", margin: "4px 4px 0 4px", borderRadius: "12px" }}
-            onDoubleClick={() => setVideoFloating(f => !f)}
+            onDoubleClick={() => toggleVideoFloat()}
           >
-            {videoFloating ? (
-              /* Placeholder shown in layout when video is floating */
-              <div className="w-full h-full flex flex-col items-center justify-center gap-2" style={{ color: "rgba(255,255,255,0.3)" }}>
-                <Maximize2 className="w-6 h-6" />
-                <p className="text-xs">Vídeo destacado</p>
-                <p className="text-[10px]" style={{ color: "rgba(255,255,255,0.2)" }}>Duplo clique para recolher</p>
-              </div>
+            {/* Video always in DOM so videoRef works with native PiP */}
+            {production?.videoUrl ? (
+              <video
+                ref={videoRef}
+                src={production.videoUrl}
+                className="w-full h-full object-contain"
+                onPlay={() => setIsPlaying(true)}
+                onPause={() => setIsPlaying(false)}
+                onLoadedMetadata={(e) => {
+                  const v = e.currentTarget;
+                  v.volume = deviceSettings.monitorVolume;
+                  // @ts-ignore
+                  if (deviceSettings.outputDeviceId && typeof v.setSinkId === "function") {
+                    v.setSinkId(deviceSettings.outputDeviceId).catch(() => {});
+                  }
+                }}
+                muted={isMuted}
+                playsInline
+                controls={false}
+                controlsList="nodownload noplaybackrate noremoteplayback nofullscreen"
+              />
             ) : (
+              <div className="w-full h-full flex flex-col items-center justify-center gap-3" style={{ color: "rgba(255,255,255,0.50)" }}>
+                <div className="w-16 h-16 rounded-2xl flex items-center justify-center" style={{ background: "rgba(255,255,255,0.10)" }}>
+                  <Play className="w-7 h-7" />
+                </div>
+                <p className="text-xs">Nenhum video anexado a esta producao</p>
+              </div>
+            )}
+            {/* PiP active overlay */}
+            {videoFloating && (
+              <div className="absolute inset-0 flex flex-col items-center justify-center gap-2" style={{ background: "rgba(10,10,14,0.85)", color: "rgba(255,255,255,0.4)", zIndex: 2 }}>
+                <Maximize2 className="w-6 h-6" />
+                <p className="text-xs">Vídeo em PiP</p>
+                <p className="text-[10px]" style={{ color: "rgba(255,255,255,0.25)" }}>Duplo clique para recolher</p>
+              </div>
+            )}
+            {!videoFloating && (
               <>
-                {production?.videoUrl ? (
-                  <video
-                    ref={videoRef}
-                    src={production.videoUrl}
-                    className="w-full h-full object-contain"
-                    onPlay={() => setIsPlaying(true)}
-                    onPause={() => setIsPlaying(false)}
-                    onLoadedMetadata={(e) => {
-                      const v = e.currentTarget;
-                      v.volume = deviceSettings.monitorVolume;
-                      // @ts-ignore
-                      if (deviceSettings.outputDeviceId && typeof v.setSinkId === "function") {
-                        v.setSinkId(deviceSettings.outputDeviceId).catch(() => {});
-                      }
-                    }}
-                    muted={isMuted}
-                    playsInline
-                    disablePictureInPicture
-                    controls={false}
-                    controlsList="nodownload noplaybackrate noremoteplayback nofullscreen"
-                  />
-                ) : (
-                  <div className="w-full h-full flex flex-col items-center justify-center gap-3" style={{ color: "rgba(255,255,255,0.50)" }}>
-                    <div className="w-16 h-16 rounded-2xl flex items-center justify-center" style={{ background: "rgba(255,255,255,0.10)" }}>
-                      <Play className="w-7 h-7" />
-                    </div>
-                    <p className="text-xs">Nenhum video anexado a esta producao</p>
-                  </div>
-                )}
                 <button
                   onClick={(e) => { e.stopPropagation(); setIsMuted((m) => !m); }}
                   className="absolute top-3 right-3 p-2 rounded-xl bg-black/40 text-zinc-400 hover:text-white transition-all hover:bg-black/60"
@@ -3517,48 +3568,6 @@ export default function RecordingRoom() {
               </>
             )}
           </div>
-
-          {/* Floating video PiP panel */}
-          {videoFloating && (
-            <FloatingPanel title="Vídeo" onClose={() => setVideoFloating(false)} initialWidth={520} initialHeight={320}>
-              <div style={{ width: "100%", height: "100%", background: "rgb(10,10,14)", position: "relative" }} onDoubleClick={() => setVideoFloating(false)}>
-                {production?.videoUrl ? (
-                  <video
-                    ref={videoRef}
-                    src={production.videoUrl}
-                    className="w-full h-full object-contain"
-                    onPlay={() => setIsPlaying(true)}
-                    onPause={() => setIsPlaying(false)}
-                    onLoadedMetadata={(e) => {
-                      const v = e.currentTarget;
-                      v.volume = deviceSettings.monitorVolume;
-                      // @ts-ignore
-                      if (deviceSettings.outputDeviceId && typeof v.setSinkId === "function") {
-                        v.setSinkId(deviceSettings.outputDeviceId).catch(() => {});
-                      }
-                    }}
-                    muted={isMuted}
-                    playsInline
-                    disablePictureInPicture
-                    controls={false}
-                    controlsList="nodownload noplaybackrate noremoteplayback nofullscreen"
-                  />
-                ) : (
-                  <div className="w-full h-full flex items-center justify-center" style={{ color: "rgba(255,255,255,0.4)" }}>
-                    <p className="text-xs">Nenhum vídeo</p>
-                  </div>
-                )}
-                <button
-                  onClick={(e) => { e.stopPropagation(); setIsMuted((m) => !m); }}
-                  className="absolute top-2 right-2 p-1.5 rounded-lg bg-black/50 text-zinc-400 hover:text-white transition-all"
-                >
-                  {isMuted ? <VolumeX className="w-3.5 h-3.5" /> : <Volume2 className="w-3.5 h-3.5" />}
-                </button>
-                {/* Timecode HH:MM:SS — PIP draggable, resizable */}
-                <DraggableTimecode videoRef={videoRef} visible={timecodeVisible && videoDuration > 0} />
-              </div>
-            </FloatingPanel>
-          )}
 
           {videoDuration > 0 && (
             <div className="px-3 sm:px-5 py-2" style={{ background: "hsl(var(--muted) / 0.4)", borderTop: "1px solid hsl(var(--border))" }}>
@@ -3798,7 +3807,7 @@ export default function RecordingRoom() {
               </span>
               <button
                 type="button"
-                onClick={() => setScriptFloating(f => !f)}
+                onClick={() => toggleScriptFloat()}
                 title={scriptFloating ? "Recolher roteiro" : "Destacar roteiro (PiP)"}
                 style={{ display: "flex", alignItems: "center", justifyContent: "center", width: 20, height: 20, borderRadius: 5, background: scriptFloating ? "hsl(var(--primary) / 0.12)" : "hsl(var(--muted))", border: `1px solid ${scriptFloating ? "hsl(var(--primary) / 0.3)" : "hsl(var(--border))"}`, color: scriptFloating ? "hsl(var(--primary))" : "hsl(var(--muted-foreground))", cursor: "pointer" }}
               >
@@ -3824,7 +3833,7 @@ export default function RecordingRoom() {
               <div className="w-px h-3" style={{ background: "hsl(var(--border))" }} />
               <button
                 type="button"
-                onClick={() => { setScriptAutoFollow(true); scrollScriptToLine(currentLine, "smooth"); }}
+                onClick={() => { const next = !scriptAutoFollow; setScriptAutoFollow(next); if (next) scrollScriptToLine(currentLine, "smooth"); }}
                 className="text-[10px] font-semibold px-1.5 py-1 rounded-full transition-colors flex items-center gap-1"
                 style={scriptAutoFollow
                   ? { background: "hsl(var(--primary) / 0.10)", color: "hsl(var(--primary))", border: "1px solid hsl(var(--primary) / 0.25)" }
@@ -3864,8 +3873,8 @@ export default function RecordingRoom() {
             </div>
           </div>
 
-          {scriptFloating && (
-            <FloatingPanel title="Roteiro" onClose={() => setScriptFloating(false)} initialWidth={400} initialHeight={520}>
+          {scriptFloating && !scriptPipWindow && (
+            <FloatingPanel title="Roteiro" onClose={() => toggleScriptFloat()} initialWidth={400} initialHeight={520}>
               <div
                 ref={scriptViewportRef}
                 className="flex-1 overflow-y-auto py-3 px-4 min-h-0 relative"
@@ -4016,7 +4025,53 @@ export default function RecordingRoom() {
             </FloatingPanel>
           )}
 
-          {!scriptFloating && (
+          {scriptPipWindow && !scriptPipWindow.closed && createPortal(
+            <div
+              ref={scriptViewportRef}
+              style={{ width: "100%", height: "100vh", overflowY: "auto", background: "hsl(var(--background))", color: "hsl(var(--foreground))", boxSizing: "border-box", padding: "12px 16px", scrollBehavior: "auto" }}
+              onScroll={handleScriptViewportScroll}
+              onWheelCapture={markScriptUserScrollIntent}
+              onTouchMoveCapture={markScriptUserScrollIntent}
+              onPointerDownCapture={markScriptUserScrollIntent}
+            >
+            {scriptLines.length > 1 && (
+              <div style={{ position: "absolute", right: 4, top: 12, bottom: 12, width: 3, borderRadius: 9999, background: "hsl(var(--border))", pointerEvents: "none" }}>
+                <div style={{ position: "absolute", left: 0, right: 0, width: "100%", height: 34, borderRadius: 9999, top: `${(currentLine / Math.max(1, scriptLines.length - 1)) * 100}%`, transform: "translateY(-50%)", background: "hsl(var(--primary) / 0.50)", boxShadow: "0 0 0 1px hsl(var(--primary) / 0.18)", transition: "top 500ms ease-out" }} />
+              </div>
+            )}
+            {scriptLines
+              .map((line, originalIndex) => ({ line, originalIndex }))
+              .filter(({ line }) => !showOnlyMyCharacter || !recordingProfile || line.character.toLowerCase().trim() === recordingProfile.characterName.toLowerCase().trim())
+              .map(({ line, originalIndex: i }) => {
+                const isActive = currentLines.has(i);
+                const isInLoop = customLoop && line.start >= customLoop.start && (line.end || line.start) <= customLoop.end;
+                return (
+                  <div
+                    key={i}
+                    ref={(el) => { lineRefs.current[i] = el; }}
+                    onClick={canTextControl ? (() => handleLineClick(i)) : undefined}
+                    style={{
+                      marginBottom: 12, padding: "16px 20px", borderRadius: 12,
+                      background: isActive ? "linear-gradient(90deg, var(--room-script-active-bg) 0%, transparent 72%)" : isInLoop ? "hsl(var(--primary) / 0.04)" : "transparent",
+                      cursor: canTextControl ? "pointer" : "default", position: "relative", overflow: "hidden",
+                    }}
+                  >
+                    <div style={{ position: "absolute", left: 0, top: 8, bottom: 8, borderRadius: 9999, width: isActive ? 3 : isInLoop ? 2 : 0, opacity: isActive ? 0.65 : isInLoop ? 0.45 : 0, background: isActive ? "var(--room-script-active-accent)" : "hsl(38 92% 55%)", transition: "width 500ms, opacity 500ms, background-color 500ms" }} />
+                    <div style={{ display: "flex", alignItems: "center", gap: 12, marginBottom: 8 }}>
+                      <span style={{ fontSize: 14, fontFamily: "monospace", color: "hsl(var(--muted-foreground))" }}>{formatTimecode(line.start)}</span>
+                      <span style={{ fontWeight: 800, fontSize: Math.round(24 * scriptFontScale), color: isActive ? "hsl(var(--primary))" : "hsl(var(--muted-foreground) / 0.45)", textTransform: "uppercase", letterSpacing: "0.5px", transition: "color 500ms" }}>{line.character}</span>
+                    </div>
+                    <p style={{ fontSize: Math.round(22 * scriptFontScale), lineHeight: 1.7, color: isActive ? "hsl(var(--foreground))" : "hsl(var(--muted-foreground))", fontWeight: isActive ? 500 : 400, opacity: isActive ? 1 : 0.72, margin: 0, transition: "color 500ms, opacity 500ms" }}>
+                      {lineEdits[i] ?? line.text}
+                    </p>
+                  </div>
+                );
+            })}
+            </div>,
+            scriptPipWindow.document.body
+          )}
+
+          {!scriptFloating && !scriptPipWindow && (
             <div
               ref={scriptViewportRef}
               className="flex-1 overflow-y-auto min-h-0 relative"
@@ -4029,7 +4084,7 @@ export default function RecordingRoom() {
               onWheelCapture={markScriptUserScrollIntent}
               onTouchMoveCapture={markScriptUserScrollIntent}
               onPointerDownCapture={markScriptUserScrollIntent}
-              onDoubleClick={() => setScriptFloating(true)}
+              onDoubleClick={() => toggleScriptFloat()}
             >
               {scriptLines.length > 1 && (
                 <div className="absolute right-1 top-3 bottom-3 w-[3px] rounded-full" style={{ background: "hsl(var(--border))", pointerEvents: "none" }}>
