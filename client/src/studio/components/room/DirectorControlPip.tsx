@@ -33,9 +33,11 @@ interface PendingTake {
 export interface DirectorControlPipProps {
   // Take Approval
   pendingTake: PendingTake | null;
+  queueLength?: number;
   approvalStatus: "pending" | "approved" | "rejected" | null;
   directorFeedback: string;
   isDirector: boolean;
+  userId?: string;
   onApprovalTrim: (start: number, end: number) => Promise<void>;
   onTakeDecision: (action: "approve" | "reject", feedback: string) => void;
   onFeedbackChange: (s: string) => void;
@@ -99,9 +101,11 @@ const TEXT_MAIN = "#f1f5f9";
 
 export const DirectorControlPip = memo(function DirectorControlPip({
   pendingTake,
+  queueLength = 0,
   approvalStatus,
   directorFeedback,
   isDirector,
+  userId,
   onApprovalTrim,
   onTakeDecision,
   onFeedbackChange,
@@ -112,6 +116,8 @@ export const DirectorControlPip = memo(function DirectorControlPip({
   onToggleTextControl,
   onRevokeAllTextControl,
 }: DirectorControlPipProps) {
+  // D6: self-take = director is reviewing their own recording
+  const isSelfTake = !!(isDirector && pendingTake && userId && pendingTake.voiceActorId === userId);
   const isMobile = useIsMobile();
   // ── Panel drag, size & position ───────────────────────────────────────────
   const panelRef = useRef<HTMLDivElement>(null);
@@ -434,7 +440,7 @@ export const DirectorControlPip = memo(function DirectorControlPip({
             }}
           >
             {pendingTake && isDirector
-              ? "Revisão de Take"
+              ? isSelfTake ? "Sua Gravacao" : "Revisão de Take"
               : approvalStatus === "approved"
               ? "Take Aprovado"
               : approvalStatus === "rejected"
@@ -443,6 +449,11 @@ export const DirectorControlPip = memo(function DirectorControlPip({
               ? "Aguardando Aprovação"
               : "Studio Control"}
           </span>
+          {isDirector && queueLength > 1 && (
+            <span style={{ marginLeft: 5, fontSize: 9, padding: "1px 5px", borderRadius: 5, background: `${AMBER}22`, color: AMBER, fontWeight: 800, border: `1px solid ${AMBER}44` }}>
+              {queueLength} na fila
+            </span>
+          )}
         </div>
 
         <div
@@ -509,7 +520,7 @@ export const DirectorControlPip = memo(function DirectorControlPip({
               }}
             >
               {pendingTake && isDirector
-                ? "Revisão de Take"
+                ? isSelfTake ? "Sua Gravacao" : "Revisão de Take"
                 : approvalStatus === "approved"
                 ? "Take Aprovado"
                 : approvalStatus === "rejected"
@@ -518,6 +529,11 @@ export const DirectorControlPip = memo(function DirectorControlPip({
                 ? "Aguardando Aprovação"
                 : "Studio Control"}
             </span>
+            {isDirector && queueLength > 1 && (
+              <span style={{ marginLeft: 5, fontSize: 9, padding: "1px 5px", borderRadius: 5, background: `${AMBER}22`, color: AMBER, fontWeight: 800, border: `1px solid ${AMBER}44` }}>
+                {queueLength} na fila
+              </span>
+            )}
           </div>
           {(!pendingTake || !isDirector) && (
             <button onClick={onDismiss} style={iconBtn()}>
@@ -842,7 +858,7 @@ export const DirectorControlPip = memo(function DirectorControlPip({
                     </button>
                   </div>
 
-                  {/* Waveform trim editor (expandable) */}
+                  {/* D7: Waveform trim editor (expandable) — amber label = pre-approval context */}
                   {showTrimEditor && (
                     <div
                       style={{
@@ -850,6 +866,12 @@ export const DirectorControlPip = memo(function DirectorControlPip({
                         borderBottom: `1px solid ${BORDER}`,
                       }}
                     >
+                      <div style={{ display: "flex", alignItems: "center", gap: 4, marginBottom: 6 }}>
+                        <Scissors style={{ width: 9, height: 9, color: AMBER }} />
+                        <span style={{ fontSize: 9, fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.08em", color: AMBER }}>
+                          Cortar antes de aprovar
+                        </span>
+                      </div>
                       <TakeWaveformEditor
                         audioUrl={pendingTake.audioUrl}
                         durationSeconds={pendingTake.durationSeconds}
@@ -858,114 +880,138 @@ export const DirectorControlPip = memo(function DirectorControlPip({
                     </div>
                   )}
 
-                  {/* Feedback */}
-                  <div
-                    style={{
-                      padding: "9px 14px",
-                      borderBottom: `1px solid ${BORDER}`,
-                    }}
-                  >
-                    <div
-                      style={{
-                        display: "flex",
-                        alignItems: "center",
-                        gap: 5,
-                        marginBottom: 6,
-                      }}
-                    >
-                      <MessageSquare
-                        style={{ width: 10, height: 10, color: TEXT_MUTED }}
-                      />
-                      <span
+                  {/* D6: Self-take = compact Save/Discard; Other take = full feedback + approve/reject */}
+                  {isSelfTake ? (
+                    <div style={{ padding: "10px 14px", display: "flex", gap: 8 }}>
+                      <button
+                        onClick={handleReject}
+                        disabled={isSubmitting}
+                        style={{ ...btn(RED, RED_DIM, RED_BORDER), opacity: isSubmitting ? 0.5 : 1 }}
+                      >
+                        {isSubmitting ? <Loader2 style={{ width: 12, height: 12, animation: "spin 1s linear infinite" }} /> : <X style={{ width: 12, height: 12 }} />}
+                        Descartar
+                      </button>
+                      <button
+                        onClick={handleApprove}
+                        disabled={isSubmitting}
+                        style={{ ...btn(GREEN, GREEN_DIM, GREEN_BORDER), opacity: isSubmitting ? 0.5 : 1 }}
+                      >
+                        {isSubmitting ? <Loader2 style={{ width: 12, height: 12, animation: "spin 1s linear infinite" }} /> : <Check style={{ width: 12, height: 12 }} />}
+                        Salvar take
+                      </button>
+                    </div>
+                  ) : (
+                    <>
+                      {/* Feedback */}
+                      <div
                         style={{
-                          fontSize: 9,
-                          color: TEXT_MUTED,
-                          fontWeight: 700,
-                          textTransform: "uppercase",
-                          letterSpacing: "0.07em",
+                          padding: "9px 14px",
+                          borderBottom: `1px solid ${BORDER}`,
                         }}
                       >
-                        Feedback (opcional)
-                      </span>
-                    </div>
-                    <textarea
-                      value={localFeedback}
-                      onChange={(e) => {
-                        setLocalFeedback(e.target.value);
-                        onFeedbackChange(e.target.value);
-                      }}
-                      placeholder="Deixe um comentário para o dublador…"
-                      rows={2}
-                      style={{
-                        width: "100%",
-                        borderRadius: 8,
-                        padding: "7px 10px",
-                        resize: "vertical",
-                        background: ROW_BG,
-                        border: `1px solid ${BORDER}`,
-                        color: "#e2e8f0",
-                        fontSize: 12,
-                        outline: "none",
-                        fontFamily: "inherit",
-                        boxSizing: "border-box",
-                        minHeight: 54,
-                      }}
-                      onFocus={(e) => {
-                        e.target.style.borderColor = AMBER_BORDER;
-                      }}
-                      onBlur={(e) => {
-                        e.target.style.borderColor = BORDER;
-                      }}
-                    />
-                  </div>
+                        <div
+                          style={{
+                            display: "flex",
+                            alignItems: "center",
+                            gap: 5,
+                            marginBottom: 6,
+                          }}
+                        >
+                          <MessageSquare
+                            style={{ width: 10, height: 10, color: TEXT_MUTED }}
+                          />
+                          <span
+                            style={{
+                              fontSize: 9,
+                              color: TEXT_MUTED,
+                              fontWeight: 700,
+                              textTransform: "uppercase",
+                              letterSpacing: "0.07em",
+                            }}
+                          >
+                            Feedback (opcional)
+                          </span>
+                        </div>
+                        <textarea
+                          value={localFeedback}
+                          onChange={(e) => {
+                            setLocalFeedback(e.target.value);
+                            onFeedbackChange(e.target.value);
+                          }}
+                          placeholder="Deixe um comentário para o dublador…"
+                          rows={2}
+                          style={{
+                            width: "100%",
+                            borderRadius: 8,
+                            padding: "7px 10px",
+                            resize: "vertical",
+                            background: ROW_BG,
+                            border: `1px solid ${BORDER}`,
+                            color: "#e2e8f0",
+                            fontSize: 12,
+                            outline: "none",
+                            fontFamily: "inherit",
+                            boxSizing: "border-box",
+                            minHeight: 54,
+                          }}
+                          onFocus={(e) => {
+                            e.target.style.borderColor = AMBER_BORDER;
+                          }}
+                          onBlur={(e) => {
+                            e.target.style.borderColor = BORDER;
+                          }}
+                        />
+                      </div>
 
-                  {/* Approve / Reject */}
-                  <div
-                    style={{ padding: "10px 14px", display: "flex", gap: 8 }}
-                  >
-                    <button
-                      onClick={handleReject}
-                      disabled={isSubmitting}
-                      style={{
-                        ...btn(RED, RED_DIM, RED_BORDER),
-                        opacity: isSubmitting ? 0.5 : 1,
-                      }}
-                    >
-                      {isSubmitting ? (
-                        <Loader2
+                      {/* Approve / Reject */}
+                      <div
+                        style={{ padding: "10px 14px", display: "flex", gap: 8 }}
+                      >
+                        <button
+                          onClick={handleReject}
+                          disabled={isSubmitting}
                           style={{
-                            width: 12,
-                            height: 12,
-                            animation: "spin 1s linear infinite",
+                            ...btn(RED, RED_DIM, RED_BORDER),
+                            opacity: isSubmitting ? 0.5 : 1,
                           }}
-                        />
-                      ) : (
-                        <X style={{ width: 12, height: 12 }} />
-                      )}
-                      Rejeitar
-                    </button>
-                    <button
-                      onClick={handleApprove}
-                      disabled={isSubmitting}
-                      style={{
-                        ...btn(GREEN, GREEN_DIM, GREEN_BORDER),
-                        opacity: isSubmitting ? 0.5 : 1,
-                      }}
-                    >
-                      {isSubmitting ? (
-                        <Loader2
+                        >
+                          {isSubmitting ? (
+                            <Loader2
+                              style={{
+                                width: 12,
+                                height: 12,
+                                animation: "spin 1s linear infinite",
+                              }}
+                            />
+                          ) : (
+                            <X style={{ width: 12, height: 12 }} />
+                          )}
+                          Rejeitar
+                        </button>
+                        <button
+                          onClick={handleApprove}
+                          disabled={isSubmitting}
                           style={{
-                            width: 12,
-                            height: 12,
-                            animation: "spin 1s linear infinite",
+                            ...btn(GREEN, GREEN_DIM, GREEN_BORDER),
+                            opacity: isSubmitting ? 0.5 : 1,
                           }}
-                        />
-                      ) : (
-                        <Check style={{ width: 12, height: 12 }} />
-                      )}
-                      Aprovar
-                    </button>
-                  </div>
+                        >
+                          {isSubmitting ? (
+                            <Loader2
+                              style={{
+                                width: 12,
+                                height: 12,
+                                animation: "spin 1s linear infinite",
+                              }}
+                            />
+                          ) : (
+                            <Check style={{ width: 12, height: 12 }} />
+                          )}
+                          Aprovar
+                        </button>
+                      </div>
+                    </>
+                  )}
                 </>
               )}
 

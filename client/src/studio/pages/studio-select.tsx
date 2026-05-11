@@ -2,7 +2,7 @@ import { useState } from "react";
 import { useAuth } from "@studio/hooks/use-auth";
 import { useStudios } from "@studio/hooks/use-studios";
 import { Link, useLocation } from "wouter";
-import { Building2, Loader2, ArrowRight, LogOut, Mic2, Plus, Copy, Check, Eye, EyeOff, AlertTriangle } from "lucide-react";
+import { Building2, Loader2, ArrowRight, LogOut, Plus, Copy, Check, Eye, EyeOff, AlertTriangle } from "lucide-react";
 import { pt } from "@studio/lib/i18n";
 import { RoleBadge } from "@studio/components/ui/design-system";
 import { Button } from "@studio/components/ui/button";
@@ -67,10 +67,7 @@ export default function StudioSelect() {
 
       <header className="relative z-10 vhub-topnav px-8 h-14">
         <div className="flex items-center gap-2.5 flex-1">
-          <div className="w-7 h-7 rounded-lg bg-primary/15 ring-1 ring-primary/30 flex items-center justify-center">
-            <Mic2 className="h-3.5 w-3.5 text-primary" />
-          </div>
-          <span className="font-bold text-sm tracking-tight">V.HUB</span>
+          <span className="font-black text-xl tracking-tight font-poppins text-gray-900">THE HUB</span>
         </div>
         <div className="flex items-center gap-2">
           {user.role === "platform_owner" && (

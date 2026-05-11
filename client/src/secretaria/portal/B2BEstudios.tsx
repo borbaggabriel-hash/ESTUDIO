@@ -98,9 +98,7 @@ export function B2BEstudios() {
       {/* ── NAV ── */}
       <header className="fixed top-0 w-full z-50 bg-white/95 backdrop-blur-sm border-b border-gray-100 shadow-sm">
         <div className="max-w-7xl mx-auto px-4 md:px-8 h-[68px] flex items-center justify-between">
-          <a href="/" className="font-black text-xl tracking-tight text-gray-900" style={{ fontFamily: 'Poppins, sans-serif' }}>
-            HubDub
-          </a>
+          <a href="/" className="font-black text-xl tracking-tight font-poppins text-gray-900">THE HUB</a>
           <nav className="hidden md:flex items-center gap-8">
             <a href="#custo" className="text-sm font-medium text-gray-500 hover:text-[#6d28d9] transition-colors">Custo vs. Cabine</a>
             <a href="#features" className="text-sm font-medium text-gray-500 hover:text-[#6d28d9] transition-colors">Plataforma</a>

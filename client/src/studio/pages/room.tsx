@@ -661,6 +661,9 @@ export default function RecordingRoom() {
   const [isCustomizing, setIsCustomizing] = useState(false);
   const [listeningFor, setListeningFor] = useState<keyof Shortcuts | null>(null);
   const [deviceSettingsOpen, setDeviceSettingsOpen] = useState(false);
+  const [settingsDrawerOpen, setSettingsDrawerOpen] = useState(false);
+  const settingsButtonRef = useRef<HTMLButtonElement>(null);
+  const [settingsButtonRect, setSettingsButtonRect] = useState<DOMRect | null>(null);
   const [videoFloating, setVideoFloating] = useState(false);
   const [scriptFloating, setScriptFloating] = useState(false);
   const [scriptPipWindow, setScriptPipWindow] = useState<Window | null>(null);
@@ -915,8 +918,8 @@ export default function RecordingRoom() {
   const [uploadProgress, setUploadProgress] = useState(0);
   const [qualityMetrics, setQualityMetrics] = useState<QualityMetrics | null>(null);
 
-  // Approval system states
-  const [pendingApprovalTake, setPendingApprovalTake] = useState<{
+  // Approval system states — D1: queue instead of single pending take
+  type PendingTakeItem = {
     takeId: string;
     audioUrl: string;
     startTimeSeconds: number;
@@ -925,7 +928,19 @@ export default function RecordingRoom() {
     characterName: string;
     voiceActorName: string;
     voiceActorId: string;
-  } | null>(null);
+  };
+  const [pendingApprovalQueue, setPendingApprovalQueue] = useState<PendingTakeItem[]>([]);
+  const pendingApprovalQueueRef = useRef<PendingTakeItem[]>([]);
+  pendingApprovalQueueRef.current = pendingApprovalQueue;
+  const pendingApprovalTake = pendingApprovalQueue[0] ?? null;
+  const setPendingApprovalTake = useCallback((value: PendingTakeItem | null | ((prev: PendingTakeItem | null) => PendingTakeItem | null)) => {
+    setPendingApprovalQueue(prev => {
+      const current = prev[0] ?? null;
+      const next = typeof value === "function" ? value(current) : value;
+      if (next === null) return prev.slice(1); // shift first item
+      return [next, ...prev.slice(1)]; // replace first item
+    });
+  }, []);
   const [approvalStatus, setApprovalStatus] = useState<'pending' | 'approved' | 'rejected' | null>(null);
   const [directorFeedback, setDirectorFeedback] = useState<string>('');
   const [approvalOffset, setApprovalOffset] = useState<number>(0);
@@ -1071,10 +1086,17 @@ export default function RecordingRoom() {
           name: p.user?.fullName || p.user?.displayName || p.user?.email || "Usuario",
           role: p.role,
         }));
-    return base.map((p: any) => ({
+    const mapped = base.map((p: any) => ({
       ...p,
       role: studioRoleMap.get(p.userId) || p.role,
     }));
+    // Deduplicate by userId to prevent React duplicate-key warnings
+    const seen = new Set<string>();
+    return mapped.filter((p: any) => {
+      if (seen.has(p.userId)) return false;
+      seen.add(p.userId);
+      return true;
+    });
   }, [presenceUsers, session?.participants, studioRoleMap]);
 
   const loopRange = useMemo(() => {
@@ -1362,10 +1384,10 @@ export default function RecordingRoom() {
           }
 
           if (msg.type === "take:pending-approval") {
-            // Director receives notification of new take to approve
+            // Director receives notification of new take to approve — D1: push to queue
             if (isDirector && msg.voiceActorId !== user?.id) {
               const incomingStart = msg.startTimeSeconds ?? 0;
-              setPendingApprovalTake({
+              const newTake = {
                 takeId: msg.takeId ?? "",
                 audioUrl: msg.audioUrl ?? "",
                 startTimeSeconds: incomingStart,
@@ -1374,17 +1396,25 @@ export default function RecordingRoom() {
                 characterName: msg.characterName ?? "",
                 voiceActorName: msg.voiceActorName ?? "",
                 voiceActorId: msg.voiceActorId ?? "",
-              });
-              setApprovalOffset(incomingStart);
-              setApprovalStatus(null);
-              setDirectorFeedback("");
+              };
+              const wasEmpty = pendingApprovalQueueRef.current.length === 0;
+              setPendingApprovalQueue(prev => [...prev, newTake]);
+              if (wasEmpty) {
+                setApprovalOffset(incomingStart);
+                setApprovalStatus(null);
+                setDirectorFeedback("");
+              }
             }
             return;
           }
 
           if (msg.type === "take:approved") {
             queryClient.invalidateQueries({ queryKey: ["/api/sessions", sessionId, "takes"] });
-            if (msg.voiceActorId === user?.id && !isDirector) {
+            const isMyApprovedTake = !isDirector && (
+              (msg.takeId && pendingApprovalQueueRef.current.some(item => item.takeId === msg.takeId)) ||
+              msg.voiceActorId === user?.id
+            );
+            if (isMyApprovedTake) {
               setPendingApprovalTake(null);
               setApprovalStatus('approved');
               setDirectorFeedback(msg.feedback || '');
@@ -1394,7 +1424,11 @@ export default function RecordingRoom() {
 
           if (msg.type === "take:rejected") {
             queryClient.invalidateQueries({ queryKey: ["/api/sessions", sessionId, "takes"] });
-            if (msg.voiceActorId === user?.id && !isDirector) {
+            const isMyRejectedTake = !isDirector && (
+              (msg.takeId && pendingApprovalQueueRef.current.some(item => item.takeId === msg.takeId)) ||
+              msg.voiceActorId === user?.id
+            );
+            if (isMyRejectedTake) {
               setPendingApprovalTake(null);
               setApprovalStatus('rejected');
               setDirectorFeedback(msg.feedback || '');
@@ -2313,7 +2347,8 @@ export default function RecordingRoom() {
     approvalBlobRef.current = blob; // stored for TakeWaveformEditor — avoids CORS fetch
 
     // ➋ Show approval popup immediately with local blob URL (takeId '' while uploading)
-    setPendingApprovalTake({
+    // D1: push to queue end so pending voice actor takes are not lost
+    setPendingApprovalQueue(prev => [...prev, {
       takeId: '',
       audioUrl: blobUrl,
       startTimeSeconds: tc,
@@ -2322,7 +2357,7 @@ export default function RecordingRoom() {
       characterName: recordingProfile.characterName,
       voiceActorName: recordingProfile.voiceActorName,
       voiceActorId: user?.id || '',
-    });
+    }]);
     if (isDirector) {
       setApprovalOffset(tc);
       setApprovalStatus(null);
@@ -2402,11 +2437,11 @@ export default function RecordingRoom() {
       // Clear blob ref so waveform editor fetches from stream on remount
       approvalBlobRef.current = null;
       const streamUrl = `/api/takes/${savedTake.id}/stream?d=${durationSeconds}`;
-      setPendingApprovalTake(prev => prev ? {
-        ...prev,
-        takeId: savedTake.id,
-        audioUrl: streamUrl,
-      } : null);
+      setPendingApprovalQueue(prev => prev.map(item =>
+        item.takeId === '' && item.voiceActorId === (user?.id || '')
+          ? { ...item, takeId: savedTake.id, audioUrl: streamUrl }
+          : item
+      ));
 
       // Emit WebSocket for other directors in the room
       emitVideoEvent("take:pending-approval", {
@@ -2668,12 +2703,13 @@ export default function RecordingRoom() {
     const pendingId    = pendingApprovalTake?.voiceActorId ?? "";
     const localActorId = (recordingProfile?.voiceActorName && user?.id) ? user.id : "";
     if (showAllTracks) return all;
-    // When no permissions are set, show only local recording actor + pending-take actor.
-    // Full list only visible when director unlocks control or showAllTracks is toggled on.
+    // Show only actors who have at least one approved take, or the actor whose take
+    // is currently pending director review. Empty tracks (presence-only or profile-only)
+    // are hidden until they produce actual approved content.
+    const withTakes = new Set(approvedTakes.map(t => t.voiceActorId).filter(Boolean));
     return all.filter(a =>
-      textControllerUserIds.has(a.voiceActorId) ||
-      (pendingId    && a.voiceActorId === pendingId) ||
-      (localActorId && a.voiceActorId === localActorId)
+      withTakes.has(a.voiceActorId) ||
+      (pendingId && a.voiceActorId === pendingId)
     );
   }, [knownVoiceActors, presenceUsers, approvedTakes, pendingApprovalTake, textControllerUserIds, showAllTracks, recordingProfile, user?.id]);
 
@@ -2689,7 +2725,9 @@ export default function RecordingRoom() {
         body: JSON.stringify({ startSeconds: startSec, endSeconds: endSec }),
       });
       const bustUrl = data.audioUrl + (data.audioUrl.includes("?") ? `&v=${Date.now()}` : `?v=${Date.now()}`);
-      setPendingApprovalTake(prev => prev ? { ...prev, audioUrl: bustUrl, durationSeconds: data.durationSeconds } : null);
+      setPendingApprovalQueue(prev => prev.map((item, i) =>
+        i === 0 ? { ...item, audioUrl: bustUrl, durationSeconds: data.durationSeconds } : item
+      ));
       // Clamp approvalOffset so block stays within new take length
       const newMax = Math.max(0, videoDuration - data.durationSeconds);
       setApprovalOffset(prev => Math.min(prev, newMax));
@@ -2877,7 +2915,13 @@ export default function RecordingRoom() {
     }
 
     // Optimistic close — popup fecha imediatamente, API chama em background
-    setPendingApprovalTake(null);
+    // D1: shift queue; read next item via ref to avoid side-effects inside updater
+    const nextQueue = pendingApprovalQueueRef.current.slice(1);
+    setPendingApprovalQueue(() => nextQueue);
+    if (nextQueue.length > 0) {
+      setApprovalOffset(nextQueue[0].startTimeSeconds);
+      setDirectorFeedback("");
+    }
     setApprovalStatus(null);
     setDirectorFeedback("");
     cleanupPreview();
@@ -3236,6 +3280,10 @@ export default function RecordingRoom() {
                         )}
                         {isEditing && (
                           <div className="flex flex-col gap-2">
+                            <div className="flex items-center gap-1.5 px-1">
+                              <Check className="w-2.5 h-2.5" style={{ color: "hsl(142 60% 45%)" }} />
+                              <span className="text-[9px] font-bold uppercase tracking-wider" style={{ color: "hsl(142 60% 45%)" }}>Editar take aprovado</span>
+                            </div>
                             <TakeWaveformEditor
                               audioUrl={`/api/takes/${take.id}/stream?d=${take.durationSeconds || 0}${takeCacheBust[take.id] ? `&t=${takeCacheBust[take.id]}` : ''}`}
                               durationSeconds={take.durationSeconds || 0}
@@ -3471,6 +3519,37 @@ export default function RecordingRoom() {
             </span>
           )}
           <div className="hidden sm:block w-px h-4" style={{ background: "hsl(var(--border))" }} />
+          {(isDirector || isPrivileged) && (
+            <span
+              className="flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-bold uppercase tracking-wider shrink-0"
+              style={{ background: "rgba(245,158,11,0.14)", border: "1px solid rgba(245,158,11,0.28)", color: "#f59e0b" }}
+            >
+              {isPrivileged ? "Admin" : "Diretor"}
+            </span>
+          )}
+          {/* S5 — Take approval status badges */}
+          {!isDirector && !isPrivileged && approvalStatus === "pending" && (
+            <span className="flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-semibold shrink-0" style={{ background: "rgba(245,158,11,0.12)", border: "1px solid rgba(245,158,11,0.28)", color: "#f59e0b" }}>
+              <span className="w-1.5 h-1.5 rounded-full bg-amber-400 animate-pulse" />
+              Em revisao
+            </span>
+          )}
+          {!isDirector && !isPrivileged && approvalStatus === "approved" && (
+            <span className="flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-semibold shrink-0" style={{ background: "rgba(52,211,153,0.12)", border: "1px solid rgba(52,211,153,0.28)", color: "#34d399" }}>
+              ✓ Aprovado
+            </span>
+          )}
+          {!isDirector && !isPrivileged && approvalStatus === "rejected" && (
+            <span className="flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-semibold shrink-0" style={{ background: "rgba(248,113,113,0.12)", border: "1px solid rgba(248,113,113,0.28)", color: "#f87171" }}>
+              ✗ Rejeitado
+            </span>
+          )}
+          {(isDirector || isPrivileged) && pendingApprovalTake && (
+            <span className="flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-semibold shrink-0" style={{ background: "rgba(245,158,11,0.12)", border: "1px solid rgba(245,158,11,0.28)", color: "#f59e0b" }}>
+              <span className="w-1.5 h-1.5 rounded-full bg-amber-400 animate-pulse" />
+              Revisar take
+            </span>
+          )}
           {recordingProfile ? (
             <div className="flex items-center gap-1.5">
               <User className="w-3.5 h-3.5" style={{ color: "hsl(var(--primary))" }} />
@@ -3511,43 +3590,73 @@ export default function RecordingRoom() {
             </button>
           )}
           <div className="hidden sm:block w-px h-4" style={{ background: "hsl(var(--border))" }} />
-          <button
-            onClick={() => setDeviceSettingsOpen(true)}
-            className="flex items-center gap-1.5 transition-colors" style={{ color: "hsl(var(--muted-foreground))" }}
-            data-testid="button-open-device-settings"
-          >
-            <Monitor className="w-3.5 h-3.5" />
-            <span className="hidden sm:inline">Dispositivos</span>
-          </button>
-          <div className="hidden sm:block w-px h-4" style={{ background: "hsl(var(--border))" }} />
-          <button
-            onClick={() => { setIsCustomizing(true); setPendingShortcuts(shortcuts); }}
-            className="flex items-center gap-1.5 transition-colors" style={{ color: "hsl(var(--muted-foreground))" }}
-            data-testid="button-open-shortcuts"
-          >
-            <Settings className="w-3.5 h-3.5" />
-            <span className="hidden sm:inline">Atalhos</span>
-          </button>
-          <div className="hidden sm:block w-px h-4" style={{ background: "hsl(var(--border))" }} />
-          <button
-            onClick={() => setTimecodeVisible(v => !v)}
-            className="flex items-center gap-1.5 transition-colors"
-            style={{ color: timecodeVisible ? "hsl(var(--foreground) / 0.85)" : "hsl(var(--muted-foreground) / 0.35)" }}
-            title={timecodeVisible ? "Ocultar timecode" : "Mostrar timecode"}
-            data-testid="button-toggle-timecode"
-          >
-            <Clock className="w-3.5 h-3.5" />
-            <span className="hidden sm:inline">Timecode</span>
-          </button>
-          <button
-            onClick={() => toggleTimecodePip()}
-            className="flex items-center gap-1 transition-colors"
-            style={{ color: timecodePipWindow && !timecodePipWindow.closed ? "hsl(var(--primary))" : "hsl(var(--muted-foreground) / 0.5)", padding: "2px 4px", borderRadius: 4 }}
-            title={timecodePipWindow && !timecodePipWindow.closed ? "Fechar timecode PiP" : "Timecode em janela flutuante"}
-            data-testid="button-timecode-pip"
-          >
-            <ExternalLink className="w-3 h-3" />
-          </button>
+          {/* S1 — Settings gear button + dropdown */}
+          <div className="relative" style={{ flexShrink: 0 }}>
+            <button
+              onClick={() => { const r = settingsButtonRef.current?.getBoundingClientRect() ?? null; setSettingsButtonRect(r); setSettingsDrawerOpen(v => !v); }}
+              className="flex items-center gap-1 transition-colors"
+              style={{ color: settingsDrawerOpen ? "hsl(var(--foreground) / 0.90)" : "hsl(var(--muted-foreground))", padding: "2px 4px", borderRadius: 5, background: settingsDrawerOpen ? "hsl(var(--muted))" : "transparent" }}
+              ref={settingsButtonRef}
+              data-testid="button-settings-drawer"
+              title="Configuracoes"
+            >
+              <Settings className="w-3.5 h-3.5" />
+              <span className="hidden sm:inline text-xs">Config</span>
+            </button>
+            {settingsDrawerOpen && createPortal(
+              <>
+                <div className="fixed inset-0 z-[9000]" onClick={() => setSettingsDrawerOpen(false)} />
+                <div
+                  className="flex flex-col gap-0.5 rounded-xl overflow-hidden"
+                  style={{ position: "fixed", top: (settingsButtonRect?.bottom ?? 0) + 4, right: window.innerWidth - (settingsButtonRect?.right ?? 0), zIndex: 9001, background: "hsl(var(--card))", border: "1px solid hsl(var(--border))", boxShadow: "0 8px 24px rgba(0,0,0,0.18)", minWidth: 172 }}
+                >
+                  <button
+                    onClick={() => { setDeviceSettingsOpen(true); setSettingsDrawerOpen(false); }}
+                    className="flex items-center gap-2.5 px-3 py-2 text-sm transition-colors hover:bg-muted/60 text-left"
+                    style={{ color: "hsl(var(--foreground) / 0.80)" }}
+                    data-testid="button-open-device-settings"
+                  >
+                    <Monitor className="w-3.5 h-3.5 shrink-0" style={{ color: "hsl(var(--muted-foreground))" }} />
+                    Dispositivos
+                  </button>
+                  <button
+                    onClick={() => { setIsCustomizing(true); setPendingShortcuts(shortcuts); setSettingsDrawerOpen(false); }}
+                    className="flex items-center gap-2.5 px-3 py-2 text-sm transition-colors hover:bg-muted/60 text-left"
+                    style={{ color: "hsl(var(--foreground) / 0.80)" }}
+                    data-testid="button-open-shortcuts"
+                  >
+                    <Settings className="w-3.5 h-3.5 shrink-0" style={{ color: "hsl(var(--muted-foreground))" }} />
+                    Atalhos
+                  </button>
+                  <div style={{ height: 1, background: "hsl(var(--border))", margin: "2px 0" }} />
+                  <button
+                    onClick={() => { setTimecodeVisible(v => !v); }}
+                    className="flex items-center justify-between gap-2.5 px-3 py-2 text-sm transition-colors hover:bg-muted/60"
+                    style={{ color: "hsl(var(--foreground) / 0.80)" }}
+                    data-testid="button-toggle-timecode"
+                  >
+                    <div className="flex items-center gap-2.5">
+                      <Clock className="w-3.5 h-3.5 shrink-0" style={{ color: "hsl(var(--muted-foreground))" }} />
+                      Timecode
+                    </div>
+                    <span className="text-[10px] font-semibold" style={{ color: timecodeVisible ? "hsl(142 60% 50%)" : "hsl(var(--muted-foreground) / 0.45)" }}>
+                      {timecodeVisible ? "ON" : "OFF"}
+                    </span>
+                  </button>
+                  <button
+                    onClick={() => { toggleTimecodePip(); setSettingsDrawerOpen(false); }}
+                    className="flex items-center gap-2.5 px-3 py-2 text-sm transition-colors hover:bg-muted/60 text-left"
+                    style={{ color: timecodePipWindow && !timecodePipWindow.closed ? "hsl(var(--primary))" : "hsl(var(--foreground) / 0.80)" }}
+                    data-testid="button-timecode-pip"
+                  >
+                    <ExternalLink className="w-3.5 h-3.5 shrink-0" style={{ color: "hsl(var(--muted-foreground))" }} />
+                    Timecode PiP
+                  </button>
+                </div>
+              </>,
+              document.body
+            )}
+          </div>
           </div>
         </div>
       </header>
@@ -3754,75 +3863,40 @@ export default function RecordingRoom() {
             </div>
 
             <div className="w-full sm:w-auto flex flex-row sm:flex-row items-center justify-center gap-2" style={isLandscapeMobile ? { display: 'none' } : undefined}>
+              {/* ── Playback ── */}
               <button
                 onClick={canTextControl ? () => seek(-2) : undefined}
                 disabled={!canTextControl}
-                className="w-8 h-8 sm:w-9 sm:h-9 rounded-xl flex items-center justify-center transition-all disabled:opacity-40 disabled:cursor-not-allowed" style={{ color: "hsl(var(--muted-foreground))", background: "hsl(var(--muted))" }}
+                className="flex flex-col items-center justify-center gap-0.5 w-9 h-9 sm:w-10 sm:h-10 rounded-xl transition-all disabled:opacity-40 disabled:cursor-not-allowed"
+                style={{ color: "hsl(var(--muted-foreground))", background: "hsl(var(--muted))" }}
                 data-testid="button-back-2s"
-                title={`Back 2s (${keyLabel(shortcuts.back)})`}
+                title={canTextControl ? `Back 2s (${keyLabel(shortcuts.back)})` : "Controle cedido ao Diretor — aguarde permissao"}
               >
-                <RotateCcw className="w-4 h-4" />
+                <RotateCcw className="w-3.5 h-3.5" />
+                <span className="text-[8px] font-semibold leading-none hidden sm:block" style={{ color: "hsl(var(--muted-foreground) / 0.55)" }}>−2s</span>
               </button>
 
               <button
                 onClick={canTextControl ? handlePlayPause : undefined}
                 disabled={!canTextControl}
-                className="w-10 h-10 sm:w-11 sm:h-11 rounded-full flex items-center justify-center transition-all disabled:opacity-40 disabled:cursor-not-allowed" style={{ background: "hsl(var(--secondary))", color: "hsl(var(--foreground))", border: "1px solid hsl(var(--border))", boxShadow: "0 2px 8px rgba(0,0,0,0.08)" }}
+                className="w-10 h-10 sm:w-11 sm:h-11 rounded-full flex items-center justify-center transition-all disabled:opacity-40 disabled:cursor-not-allowed"
+                style={{ background: "hsl(var(--secondary))", color: "hsl(var(--foreground))", border: "1px solid hsl(var(--border))", boxShadow: "0 2px 8px rgba(0,0,0,0.08)" }}
                 data-testid="button-play-pause"
-                title={`Play/Pause (${keyLabel(shortcuts.playPause)})`}
+                title={canTextControl ? `Play/Pause (${keyLabel(shortcuts.playPause)})` : "Controle cedido ao Diretor — aguarde permissao"}
               >
                 {isPlaying ? <Pause className="w-5 h-5" /> : <Play className="w-5 h-5 ml-0.5" />}
               </button>
 
               <button
-                onClick={canTextControl ? (recordingStatus === "recording" ? handleStopRecording : handleStopPlayback) : undefined}
-                disabled={!canTextControl}
-                className="w-8 h-8 sm:w-9 sm:h-9 rounded-xl flex items-center justify-center transition-all disabled:opacity-40 disabled:cursor-not-allowed" style={{ color: "hsl(var(--muted-foreground))", background: "hsl(var(--muted))" }}
-                data-testid="button-stop"
-                title={`Stop (${keyLabel(shortcuts.stop)})`}
-              >
-                <Square className="w-4 h-4" />
-              </button>
-
-              <div className="hidden sm:block w-px h-8 mx-1" style={{ background: "hsl(var(--border))" }} />
-
-              {recordingStatus === "idle" || recordingStatus === "countdown" ? (
-                <button
-                  onClick={canTextControl ? startCountdown : undefined}
-                  disabled={!canTextControl || !micReady || recordingStatus === "countdown"}
-                  className="w-12 h-12 sm:w-14 sm:h-14 rounded-full flex items-center justify-center transition-all disabled:opacity-30"
-                  style={recordingStatus === "countdown"
-                    ? { background: "hsl(var(--primary) / 0.12)", border: "1px solid hsl(var(--primary) / 0.30)", cursor: "wait", color: "hsl(var(--primary))" }
-                    : { background: "hsl(var(--muted))", border: "1px solid hsl(var(--border))", color: "hsl(var(--foreground) / 0.70)" }
-                  }
-                  data-testid="button-record"
-                  title={`Record (${keyLabel(shortcuts.record)})`}
-                >
-                  <Mic className="w-5 h-5" />
-                </button>
-              ) : recordingStatus === "recording" ? (
-                <button
-                  onClick={canTextControl ? handleStopRecording : undefined}
-                  disabled={!canTextControl}
-                  className="w-12 h-12 sm:w-14 sm:h-14 rounded-full flex items-center justify-center transition-all disabled:opacity-30"
-                  style={{ background: "hsl(0 72% 55%)", boxShadow: "0 0 24px rgba(239,68,68,0.4), 0 4px 12px rgba(0,0,0,0.3)" }}
-                  data-testid="button-stop-recording"
-                  title={`Stop recording (${keyLabel(shortcuts.stop)})`}
-                >
-                  <Square className="w-5 h-5 text-white fill-white" />
-                </button>
-              ) : null}
-
-              <div className="hidden sm:block w-px h-8 mx-1" style={{ background: "hsl(var(--border))" }} />
-
-              <button
                 onClick={canTextControl ? () => seek(2) : undefined}
                 disabled={!canTextControl}
-                className="w-8 h-8 sm:w-9 sm:h-9 rounded-xl flex items-center justify-center transition-all disabled:opacity-40 disabled:cursor-not-allowed" style={{ color: "hsl(var(--muted-foreground))", background: "hsl(var(--muted))" }}
+                className="flex flex-col items-center justify-center gap-0.5 w-9 h-9 sm:w-10 sm:h-10 rounded-xl transition-all disabled:opacity-40 disabled:cursor-not-allowed"
+                style={{ color: "hsl(var(--muted-foreground))", background: "hsl(var(--muted))" }}
                 data-testid="button-forward-2s"
-                title={`Forward 2s (${keyLabel(shortcuts.forward)})`}
+                title={canTextControl ? `Forward 2s (${keyLabel(shortcuts.forward)})` : "Controle cedido ao Diretor — aguarde permissao"}
               >
-                <RotateCw className="w-4 h-4" />
+                <RotateCw className="w-3.5 h-3.5" />
+                <span className="text-[8px] font-semibold leading-none hidden sm:block" style={{ color: "hsl(var(--muted-foreground) / 0.55)" }}>+2s</span>
               </button>
 
               <button
@@ -3845,10 +3919,48 @@ export default function RecordingRoom() {
                   : { color: "hsl(var(--muted-foreground))", background: "hsl(var(--muted))" }
                 }
                 data-testid="button-loop"
-                title={`Toggle loop (${keyLabel(shortcuts.loop)})`}
+                title={canTextControl ? `Toggle loop (${keyLabel(shortcuts.loop)})` : "Controle cedido ao Diretor — aguarde permissao"}
               >
                 <Repeat className="w-4 h-4" />
               </button>
+
+              {/* ── Record FAB ── */}
+              <div className="hidden sm:block w-px h-8 mx-1" style={{ background: "hsl(var(--border))" }} />
+
+              {recordingStatus === "idle" || recordingStatus === "countdown" ? (
+                <div className="flex flex-col items-center gap-0.5">
+                  <button
+                    onClick={canTextControl ? startCountdown : undefined}
+                    disabled={!canTextControl || !micReady || recordingStatus === "countdown"}
+                    className="rounded-full flex items-center justify-center transition-all disabled:opacity-30"
+                    style={recordingStatus === "countdown"
+                      ? { width: 52, height: 52, background: "hsl(var(--primary) / 0.12)", border: "2px solid hsl(var(--primary) / 0.40)", cursor: "wait", color: "hsl(var(--primary))" }
+                      : { width: 52, height: 52, background: "hsl(var(--muted))", border: "2px solid hsl(0 72% 55% / 0.30)", color: "hsl(0 72% 60%)" }
+                    }
+                    data-testid="button-record"
+                    title={`Record (${keyLabel(shortcuts.record)})`}
+                  >
+                    <Mic className="w-5 h-5" />
+                  </button>
+                  <span className="text-[9px] font-bold tracking-wider hidden sm:block" style={{ color: recordingStatus === "countdown" ? "hsl(var(--primary))" : "hsl(0 72% 55% / 0.65)", letterSpacing: "0.1em" }}>
+                    {recordingStatus === "countdown" ? "AGUARDE" : "GRAVAR"}
+                  </span>
+                </div>
+              ) : recordingStatus === "recording" ? (
+                <div className="flex flex-col items-center gap-0.5">
+                  <button
+                    onClick={canTextControl ? handleStopRecording : undefined}
+                    disabled={!canTextControl}
+                    className="rounded-full flex items-center justify-center transition-all disabled:opacity-30"
+                    style={{ width: 52, height: 52, background: "hsl(0 72% 50%)", border: "2px solid rgba(239,68,68,0.5)", boxShadow: "0 0 0 4px rgba(239,68,68,0.12), 0 0 24px rgba(239,68,68,0.35), 0 4px 12px rgba(0,0,0,0.3)" }}
+                    data-testid="button-stop-recording"
+                    title={`Stop recording (${keyLabel(shortcuts.stop)})`}
+                  >
+                    <Square className="w-5 h-5 text-white fill-white" />
+                  </button>
+                  <span className="text-[9px] font-bold tracking-wider hidden sm:block" style={{ color: "hsl(0 72% 60%)", letterSpacing: "0.1em" }}>PARAR</span>
+                </div>
+              ) : null}
             </div>
 
             <div className="hidden sm:flex w-full sm:w-44 shrink-0 flex-col items-start sm:items-end gap-1.5" style={isLandscapeMobile ? { display: 'none' } : undefined}>
@@ -3936,11 +4048,9 @@ export default function RecordingRoom() {
                   : { background: "hsl(var(--muted))", color: "hsl(var(--muted-foreground))", border: "1px solid hsl(var(--border))" }
                 }
                 data-testid="button-filter-character"
-                title={showOnlyMyCharacter ? `Mostrando apenas ${recordingProfile?.characterName || "personagem"}` : "Filtrar por personagem"}
+                title={showOnlyMyCharacter ? `Mostrando apenas ${recordingProfile?.characterName || "seu personagem"}` : "Mostrar apenas meu personagem"}
               >
                 <User className="w-3 h-3" />
-                <span className="sm:hidden">Pers</span>
-                <span className="hidden sm:inline">Apenas personagem</span>
               </button>
               <div className="w-px h-3" style={{ background: "hsl(var(--border))" }} />
               <button
@@ -3952,15 +4062,12 @@ export default function RecordingRoom() {
                   : { background: "hsl(var(--muted))", color: "hsl(var(--muted-foreground))", border: "1px solid hsl(var(--border))" }
                 }
                 data-testid="button-script-follow"
-                title={scriptAutoFollow ? "Sincronizacao ativa" : "Ativar sincronizacao"}
+                title={scriptAutoFollow ? "Auto-seguir ativo — roteiro sincronizado com o video" : "Ativar auto-seguir"}
               >
                 <Navigation className="w-3 h-3" />
-                <span className="sm:hidden">Sync</span>
-                <span className="hidden sm:inline">SEGUIR</span>
+                <span className="text-[10px]">AUTO</span>
+                {scriptAutoFollow && <span className="text-[9px] leading-none">🔒</span>}
               </button>
-              <span className="text-[10px] hidden sm:inline" style={{ color: "hsl(var(--muted-foreground) / 0.55)" }}>
-                {scriptAutoFollow ? "texto sincronizado" : "texto livre"}
-              </span>
               <div className="w-px h-3" style={{ background: "hsl(var(--border))" }} />
               <button
                 type="button"
@@ -4285,6 +4392,71 @@ export default function RecordingRoom() {
 
       {(isDirector || isPrivileged) && (
         <>
+          {/* ── DawTimeline header — online users ── */}
+          <div style={{ flexShrink: 0, background: "#060810", borderTop: "1px solid rgba(255,255,255,0.05)" }}>
+            <div style={{ height: 34, display: "flex", alignItems: "center", justifyContent: "space-between", padding: "0 14px", gap: 8, overflow: "hidden" }}>
+              {/* User list */}
+              <div style={{ display: "flex", alignItems: "center", gap: 6, overflow: "hidden", flex: 1, minWidth: 0 }}>
+                {presenceRoster.length === 0 ? (
+                  <span style={{ fontSize: 10, color: "#334155", fontStyle: "italic" }}>Nenhum usuario online</span>
+                ) : (
+                  <>
+                    {(() => {
+                      const DIRECTOR_ROLES = new Set(["platform_owner", "diretor", "director", "admin", "owner"]);
+                      return presenceRoster.slice(0, 6).map((p: any) => {
+                      const isDir = p.role && DIRECTOR_ROLES.has(p.role);
+                      const isRecording = remoteRecording?.voiceActorId === p.userId;
+                      const hasPending = pendingApprovalTake?.voiceActorId === p.userId;
+                      const isSelf = p.userId === user?.id;
+                      const dotColor = isRecording ? "#f87171" : hasPending ? "#f59e0b" : "#22c55e";
+                      const nameParts = (p.name || "?").split(" ");
+                      const shortName = nameParts.length >= 2
+                        ? `${nameParts[0]} ${nameParts[nameParts.length - 1]}`
+                        : nameParts[0];
+                      const roleLabel = isDir ? (p.role === "platform_owner" ? "ADMIN" : "DIR") : "DUB";
+                      const roleColor = isDir ? "#f59e0b" : "#475569";
+                      const statusTitle = isRecording ? " — gravando" : hasPending ? " — take aguardando revisao" : " — online";
+                      return (
+                        <div
+                          key={p.userId}
+                          title={`${p.name}${statusTitle}`}
+                          style={{ display: "inline-flex", alignItems: "center", gap: 4, flexShrink: 0, padding: "2px 6px 2px 4px", borderRadius: 5, background: isSelf ? "rgba(255,255,255,0.05)" : "transparent" }}
+                        >
+                          <span style={{
+                            width: 6, height: 6, borderRadius: "50%", flexShrink: 0,
+                            background: dotColor,
+                            boxShadow: isRecording ? `0 0 5px ${dotColor}` : "none",
+                            animation: isRecording ? "dtl-rec-dot .9s ease-in-out infinite" : "none",
+                          }} />
+                          <span style={{ fontSize: 11, fontWeight: isSelf ? 600 : 400, color: isSelf ? "#94a3b8" : "#475569", whiteSpace: "nowrap", maxWidth: 90, overflow: "hidden", textOverflow: "ellipsis" }}>
+                            {shortName}
+                          </span>
+                          <span style={{ fontSize: 8, fontWeight: 700, letterSpacing: "0.06em", color: roleColor, opacity: 0.7 }}>
+                            {roleLabel}
+                          </span>
+                        </div>
+                      );
+                    });
+                    })()}
+                    {presenceRoster.length > 6 && (
+                      <span style={{ fontSize: 10, color: "#334155", flexShrink: 0 }}>+{presenceRoster.length - 6}</span>
+                    )}
+                  </>
+                )}
+              </div>
+              {/* Track filter toggle */}
+              <div style={{ flexShrink: 0 }}>
+                <button
+                  onClick={() => setShowAllTracks(v => !v)}
+                  style={{ fontSize: 10, fontWeight: 600, padding: "2px 8px", borderRadius: 6, background: showAllTracks ? "rgba(129,140,248,0.15)" : "rgba(255,255,255,0.04)", border: `1px solid ${showAllTracks ? "rgba(129,140,248,0.3)" : "rgba(255,255,255,0.07)"}`, color: showAllTracks ? "#818cf8" : "#475569", cursor: "pointer", fontFamily: "inherit", transition: "all .15s" }}
+                  title={showAllTracks ? "Mostrando todos os tracks — clique para filtrar" : "Mostrando tracks com permissao — clique para ver todos"}
+                >
+                  {showAllTracks ? "Todos" : "Ativos"}
+                </button>
+              </div>
+            </div>
+          </div>
+
           {/* ── Handle de redimensionamento da timeline ── */}
           <div
             onPointerDown={handleDawResizePointerDown}
@@ -4357,15 +4529,17 @@ export default function RecordingRoom() {
       {(isDirector || isPrivileged || !!pendingApprovalTake || !!approvalStatus) && (
         <DirectorControlPip
           pendingTake={pendingApprovalTake as any}
+          queueLength={pendingApprovalQueue.length}
           approvalStatus={approvalStatus}
           directorFeedback={directorFeedback}
           isDirector={isDirector || isPrivileged}
+          userId={user?.id}
           onApprovalTrim={handleApprovalTrim}
           onTakeDecision={handleTakeDecision}
           onFeedbackChange={setDirectorFeedback}
           onDirectorPreview={handleDirectorPreview}
           onDismiss={() => {
-            setPendingApprovalTake(null);
+            setPendingApprovalQueue([]);
             setApprovalStatus(null);
             setDirectorFeedback('');
             cleanupPreview();

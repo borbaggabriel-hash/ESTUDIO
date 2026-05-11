@@ -369,7 +369,6 @@ function App() {
   const [isEnrollmentOpen, setIsEnrollmentOpen] = useState(false);
   const [selectedModuleForEnrollment, setSelectedModuleForEnrollment] = useState<string | undefined>(undefined);
   const [activeFaq, setActiveFaq] = useState<number | null>(null);
-  const [isB2BDropdownOpen, setIsB2BDropdownOpen] = useState(false);
   const [showAllTeachers, setShowAllTeachers] = useState(false);
   const [isMobileMenuOpen, setIsMobileMenuOpen] = useState(false);
   const [isBannerDismissed, setIsBannerDismissed] = useState(
@@ -619,43 +618,9 @@ function App() {
             {[['#curso','O Curso'],['#modulos','Módulos'],['#professores','Professores'],['#depoimentos','Depoimentos']].map(([href,label])=>(
               <a key={href} href={href} className="text-sm font-medium text-gray-500 hover:text-[#6d28d9] transition-colors">{label}</a>
             ))}
-            {/* Soluções B2B dropdown */}
-            <div className="relative" onMouseEnter={() => setIsB2BDropdownOpen(true)} onMouseLeave={() => setIsB2BDropdownOpen(false)}>
-              <button className="text-sm font-medium text-gray-500 hover:text-[#6d28d9] transition-colors flex items-center gap-1">
-                Soluções B2B
-                <ChevronDown className={`w-3.5 h-3.5 transition-transform ${isB2BDropdownOpen ? 'rotate-180' : ''}`} />
-              </button>
-              <AnimatePresence>
-                {isB2BDropdownOpen && (
-                  <motion.div
-                    initial={{ opacity: 0, y: 8 }}
-                    animate={{ opacity: 1, y: 0 }}
-                    exit={{ opacity: 0, y: 8 }}
-                    transition={{ duration: 0.15 }}
-                    className="absolute top-full left-1/2 -translate-x-1/2 mt-2 w-64 rounded-2xl bg-white border border-gray-100 shadow-xl overflow-hidden z-50"
-                  >
-                    <a href="/b2b/escolas" className="flex items-start gap-3 px-5 py-4 hover:bg-gray-50 transition-colors border-b border-gray-50">
-                      <span className="text-xl">🎓</span>
-                      <div>
-                        <p className="text-sm font-semibold text-gray-900">Escolas de Dublagem</p>
-                        <p className="text-xs text-gray-500 mt-0.5">Cursos livres e pós-graduação</p>
-                      </div>
-                    </a>
-                    <a href="/b2b/estudios" className="flex items-start gap-3 px-5 py-4 hover:bg-gray-50 transition-colors">
-                      <span className="text-xl">🎙️</span>
-                      <div>
-                        <p className="text-sm font-semibold text-gray-900">Estúdios Profissionais</p>
-                        <p className="text-xs text-gray-500 mt-0.5">Sessões remotas de dublagem</p>
-                      </div>
-                    </a>
-                  </motion.div>
-                )}
-              </AnimatePresence>
-            </div>
           </nav>
           <div className="flex items-center gap-3">
             <button onClick={() => setIsLoginOpen(true)} className="hidden md:block text-sm font-medium text-gray-500 hover:text-[#6d28d9] transition-colors">Área do Aluno</button>
-            <button onClick={() => handleEnroll()} className="hidden md:block bg-[#6d28d9] text-white font-bold rounded-full px-5 py-2.5 text-sm hover:bg-[#5b21b6] transition-all shadow-[0_4px_14px_rgba(109,40,217,0.3)]">Matricule-se</button>
             <button onClick={() => setIsMobileMenuOpen(v => !v)} className="md:hidden p-2 text-gray-700 hover:text-[#6d28d9] transition-colors" aria-label="Menu">
               {isMobileMenuOpen ? <X className="w-6 h-6" /> : <Menu className="w-6 h-6" />}
             </button>
@@ -713,17 +678,6 @@ function App() {
                 </button>
               </motion.div>
             </div>
-            <motion.div initial={{opacity:0}} animate={{opacity:1}} transition={{duration:0.5,delay:0.4}} className="hidden md:flex flex-wrap gap-4 w-full mt-10">
-              {[
-                ...uniqueModules.map((mod:any) => mod.title?.split('—')[0]?.trim() || mod.title),
-                ...uniqueModules.flatMap((mod:any) => mod.details?.lessons?.slice(0, 5) ?? []),
-              ].map((label, i) => (
-                <HoverPill
-                  key={`pill-${i}`}
-                  label={label}
-                />
-              ))}
-            </motion.div>
           </div>
         </section>
 
@@ -878,7 +832,7 @@ function App() {
       {/* ── FOOTER ── */}
       <footer className="bg-gray-900 text-gray-400 py-16">
         <div className="max-w-7xl mx-auto px-4 md:px-8">
-          <div className="grid md:grid-cols-4 gap-6 md:gap-10 mb-8 md:mb-12">
+          <div className="grid md:grid-cols-5 gap-6 md:gap-10 mb-8 md:mb-12">
             <div className="md:col-span-2">
               <span className="font-black text-2xl text-white font-poppins">THE HUB</span>
               <p className="mt-3 text-sm leading-relaxed max-w-xs">A escola de dublagem que forma profissionais para os maiores estúdios do Brasil.</p>
@@ -894,6 +848,13 @@ function App() {
                 {[['#curso','O Curso'],['#modulos','Módulos'],['#professores','Professores'],['#depoimentos','Depoimentos']].map(([href,label])=>(
                   <li key={href}><a href={href} className="hover:text-white transition-colors">{label}</a></li>
                 ))}
+              </ul>
+            </div>
+            <div>
+              <p className="text-white font-bold text-sm mb-4 font-poppins">Soluções B2B</p>
+              <ul className="space-y-2 text-sm">
+                <li><a href="/b2b/escolas" className="hover:text-white transition-colors">Escolas de Dublagem</a></li>
+                <li><a href="/b2b/estudios" className="hover:text-white transition-colors">Estúdios Profissionais</a></li>
               </ul>
             </div>
             <div>

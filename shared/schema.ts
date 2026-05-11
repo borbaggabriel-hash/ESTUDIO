@@ -413,6 +413,13 @@ export const studentActivity = pgTable("student_activity", {
   createdAt: timestamp("created_at").defaultNow(),
 });
 
+export const hubNotices = pgTable("hub_notices", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  title: text("title").notNull(),
+  body: text("body").notNull(),
+  createdAt: timestamp("created_at").defaultNow(),
+});
+
 // ── Hub types ──────────────────────────────────────────────────────────────────
 export type HubEnrollment = typeof hubEnrollments.$inferSelect;
 export type StudentProfile = typeof studentProfiles.$inferSelect;

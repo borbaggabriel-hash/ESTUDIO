@@ -37,7 +37,7 @@ export function StudentDashboard({ onLogout, onHome, data, studentData, onRefres
     { id: 'dashboard', label: 'Início', icon: LayoutDashboard },
     { id: 'agenda', label: 'Agenda', icon: Calendar },
     { id: 'mensagens', label: 'Mensagens', icon: MessageSquare, badge: unreadCount },
-    { id: 'financeiro', label: 'Financeiro', icon: CreditCard },
+    { id: 'financeiro', label: 'Financeiro', icon: CreditCard, locked: true },
     { id: 'suporte', label: 'Suporte', icon: HelpCircle },
     { id: 'perfil', label: 'Meu Perfil', icon: User },
   ];
@@ -46,7 +46,7 @@ export function StudentDashboard({ onLogout, onHome, data, studentData, onRefres
     { id: 'dashboard', label: 'Início', icon: LayoutDashboard },
     { id: 'agenda', label: 'Agenda', icon: Calendar },
     { id: 'mensagens', label: 'Mensagens', icon: MessageSquare, badge: unreadCount },
-    { id: 'financeiro', label: 'Financeiro', icon: CreditCard },
+    { id: 'financeiro', label: 'Financeiro', icon: CreditCard, locked: true },
     { id: 'suporte', label: 'Suporte', icon: HelpCircle },
   ];
 
@@ -87,15 +87,20 @@ export function StudentDashboard({ onLogout, onHome, data, studentData, onRefres
             return (
               <button
                 key={item.id}
-                onClick={() => setActiveTab(item.id)}
+                onClick={() => { if (!(item as any).locked) setActiveTab(item.id); }}
+                disabled={(item as any).locked}
                 className={`w-full flex items-center gap-3 px-3 py-2.5 rounded-lg transition-all text-sm text-left relative ${
+                  (item as any).locked ? 'opacity-40 cursor-not-allowed text-gray-400' :
                   isActive ? 'bg-gray-100 text-gray-900' : 'text-gray-500 hover:text-gray-800 hover:bg-gray-50'
                 }`}
               >
                 {isActive && <span className="absolute left-0 top-1.5 bottom-1.5 w-0.5 bg-cyan-500 rounded-full" />}
                 <Icon className={`w-4 h-4 shrink-0 ${isActive ? 'text-gray-900' : 'text-gray-400'}`} />
                 <span className="flex-1">{item.label}</span>
-                {item.badge != null && item.badge > 0 && (
+                {(item as any).locked && (
+                  <span className="text-[9px] font-semibold uppercase tracking-wider px-1.5 py-0.5 rounded bg-gray-100 text-gray-400">Em breve</span>
+                )}
+                {!(item as any).locked && item.badge != null && item.badge > 0 && (
                   <span className="w-5 h-5 rounded-full bg-cyan-600 text-white text-[10px] flex items-center justify-center">
                     {item.badge}
                   </span>
@@ -177,13 +182,16 @@ export function StudentDashboard({ onLogout, onHome, data, studentData, onRefres
           return (
             <button
               key={item.id}
-              onClick={() => setActiveTab(item.id)}
-              className={`relative flex flex-col items-center justify-center gap-0.5 px-1 py-2 rounded-xl transition-all flex-1 ${isActive ? 'text-gray-900' : 'text-gray-400'}`}
+              onClick={() => { if (!(item as any).locked) setActiveTab(item.id); }}
+              disabled={(item as any).locked}
+              className={`relative flex flex-col items-center justify-center gap-0.5 px-1 py-2 rounded-xl transition-all flex-1 ${
+                (item as any).locked ? 'opacity-40 cursor-not-allowed text-gray-400' : isActive ? 'text-gray-900' : 'text-gray-400'
+              }`}
             >
-              {isActive && <motion.div layoutId="mobileActiveTab" className="absolute inset-0 bg-gray-100 rounded-xl" transition={{ type: 'spring', stiffness: 380, damping: 30 }} />}
+              {isActive && !(item as any).locked && <motion.div layoutId="mobileActiveTab" className="absolute inset-0 bg-gray-100 rounded-xl" transition={{ type: 'spring', stiffness: 380, damping: 30 }} />}
               <div className="relative">
                 <Icon className="w-5 h-5 relative z-10" />
-                {item.badge != null && item.badge > 0 && (
+                {!(item as any).locked && item.badge != null && item.badge > 0 && (
                   <span className="absolute -top-1.5 -right-1.5 w-4 h-4 rounded-full bg-cyan-600 text-white text-[9px] font-bold flex items-center justify-center z-20">{item.badge}</span>
                 )}
               </div>

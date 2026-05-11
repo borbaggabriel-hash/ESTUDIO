@@ -10,13 +10,13 @@ import { storage } from "./storage";
 import { rooms, broadcast } from "./video-sync";
 import { z } from "zod";
 import { db } from "./db";
-import { eq, and, ne } from "drizzle-orm";
+import { eq, and, ne, desc } from "drizzle-orm";
 import {
   productions, characters, takes, users, studios, sessions, studioMemberships, userStudioRoles,
   notifications, sessionParticipants,
   hubBanners, hubModules, hubTeachers, hubLearnings, hubTestimonials, hubFaqs, hubSettings,
   hubEnrollments, studentProfiles, studentEnrollments, studentMessages, studentInvoices,
-  studentSupport, studentAgenda, studentActivity, vendedorComissoes,
+  studentSupport, studentAgenda, studentActivity, vendedorComissoes, hubNotices,
   type Production, type Session,
   insertProductionSchema, insertCharacterSchema, insertTakeSchema, insertSessionSchema,
 } from "@shared/schema";
@@ -2786,6 +2786,31 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
   });
   app.delete("/api/hub/admin/testimonials/:id", requireHubAdmin, async (req, res) => {
     await db.delete(hubTestimonials).where(eq(hubTestimonials.id, Number(req.params.id)));
+    res.json({ ok: true });
+  });
+
+  // ── Hub: avisos (notices) ──────────────────────────────────────────────────
+  app.get("/api/hub/notices", async (_req, res) => {
+    try {
+      const rows = await db.select().from(hubNotices).orderBy(desc(hubNotices.createdAt));
+      res.json(rows);
+    } catch (err: any) {
+      res.status(500).json({ message: err.message });
+    }
+  });
+
+  app.post("/api/hub/admin/notices", requireHubAdmin, async (req, res) => {
+    try {
+      const { title, body } = z.object({ title: z.string().min(1), body: z.string().min(1) }).parse(req.body);
+      const [row] = await db.insert(hubNotices).values({ id: randomUUID(), title, body }).returning();
+      res.status(201).json(row);
+    } catch (err: any) {
+      res.status(400).json({ message: err.message });
+    }
+  });
+
+  app.delete("/api/hub/admin/notices/:id", requireHubAdmin, async (req, res) => {
+    await db.delete(hubNotices).where(eq(hubNotices.id, req.params.id));
     res.json({ ok: true });
   });
 

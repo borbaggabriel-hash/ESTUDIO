@@ -2998,7 +2998,7 @@ export function AdminPanel({ data, onSave, onClose }: any) {
                         </div>
                       ) : (
                         <div className="space-y-3">
-                          {notices.map((n: any) => {
+                          {notices.filter(Boolean).map((n: any) => {
                             const date = n.created_at ? new Date(n.created_at).toLocaleDateString('pt-BR', { day: '2-digit', month: 'short', year: 'numeric' }) : '';
                             return (
                               <div key={n.id} className="glass-panel p-5 rounded-2xl border-gray-100 flex items-start gap-4">

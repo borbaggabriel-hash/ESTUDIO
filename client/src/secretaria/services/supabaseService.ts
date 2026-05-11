@@ -294,9 +294,15 @@ export const firebaseService = {
     return api(`/api/hub/admin/agenda/${id}`, { method: 'DELETE' });
   },
 
-  async getNotices(_uid?: string) { return []; },
-  async createNotice(_notice: any) {},
-  async deleteNotice(_id: string) {},
+  async getNotices(_uid?: string) {
+    try { return await api('/api/hub/notices'); } catch { return []; }
+  },
+  async createNotice(notice: { title: string; body: string }) {
+    return api('/api/hub/admin/notices', { method: 'POST', body: JSON.stringify(notice) });
+  },
+  async deleteNotice(id: string) {
+    return api(`/api/hub/admin/notices/${id}`, { method: 'DELETE' });
+  },
 
   async getSupportTickets(uid: string) {
     try { return await api(`/api/hub/admin/students/${uid}/support`); } catch { return []; }
