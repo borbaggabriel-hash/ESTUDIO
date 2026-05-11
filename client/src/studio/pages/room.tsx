@@ -1672,7 +1672,7 @@ export default function RecordingRoom() {
       const idx = scriptLines.findIndex(
         (line) => t >= line.start && t < (line.end ?? line.start + 1)
       );
-      if (idx !== -1 && idx !== currentLine && scriptAutoFollowRef.current) {
+      if (idx !== -1 && idx !== currentLine) {
         setCurrentLine(idx);
       }
 
