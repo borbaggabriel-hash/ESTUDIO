@@ -117,8 +117,14 @@ export function registerAuthRoutes(app: Express): void {
         return res.status(403).json({ message: "Sua conta foi rejeitada pelo administrador." });
       }
 
-      req.login(user, (loginErr) => {
+      req.login(user, async (loginErr) => {
         if (loginErr) return next(loginErr);
+        // Fire-and-forget: record last login timestamp (column added by migration 003)
+        try {
+          await authStorage.updateLastLogin?.(user.id);
+        } catch (e) {
+          logger.warn("Failed to update last_login_at", { userId: user.id, err: String(e) });
+        }
         const { passwordHash, ...safeUser } = user;
         return res.json({ user: safeUser });
       });

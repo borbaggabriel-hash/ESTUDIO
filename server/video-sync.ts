@@ -261,6 +261,11 @@ export function setupVideoSync(httpServer: Server) {
         const isPrivileged = isPrivilegedStudioRole(ws.role);
         const controllerUserIds = getTextControllers(sessionId);
         const isController = Boolean(ws.userId && controllerUserIds.has(ws.userId));
+        // canControl = privilegiado OU autorizado nominalmente OU controle global aberto
+        const tempPerms = tempPermissions.get(sessionId);
+        const hasTempPerm = Boolean(ws.userId && tempPerms?.has(ws.userId));
+        const globalControl = globalControlSessions.get(sessionId) || false;
+        const canControl = isPrivileged || hasTempPerm || globalControl;
 
         if (
           msg.type === "grant-permission" ||
@@ -318,11 +323,37 @@ export function setupVideoSync(httpServer: Server) {
           if (typeof msg.text !== "string") return;
         }
 
-        if (msg.type === "video-seek" && typeof msg.lineIndex === "number") {
-          if (!isPrivileged && !isController) return;
+        // ── Controle de playback / loop / preroll: exige canControl ─────────
+        if (
+          msg.type === "video-play" ||
+          msg.type === "video-pause" ||
+          msg.type === "video-seek" ||
+          msg.type === "sync-loop" ||
+          msg.type === "recording:preroll"
+        ) {
+          // video-seek com lineIndex (saltos guiados de roteiro) também é
+          // permitido para controladores de texto autorizados.
+          const allowController = msg.type === "video-seek" && typeof msg.lineIndex === "number";
+          if (!canControl && !(allowController && isController)) return;
         }
 
-        const payload = JSON.stringify({ ...msg, userId: ws.userId });
+        // ── take:approved / take:rejected DEVEM vir somente do server (REST).
+        // Descarta tentativas de spoof vindas de clientes.
+        if (msg.type === "take:approved" || msg.type === "take:rejected") return;
+
+        // ── Anti-spoof: voiceActorId só pode ser o próprio ws.userId ────────
+        const ANTI_SPOOF_TYPES = new Set<string>([
+          "take:pending-approval",
+          "recording:start",
+          "recording:peak",
+          "recording:stop",
+        ]);
+        const safePayload: Record<string, any> = { ...msg, userId: ws.userId };
+        if (ANTI_SPOOF_TYPES.has(msg.type as string)) {
+          safePayload.voiceActorId = ws.userId;
+        }
+
+        const payload = JSON.stringify(safePayload);
         room.forEach((client) => {
           if (client !== ws && client.readyState === WebSocket.OPEN) {
             client.send(payload);
@@ -333,23 +364,30 @@ export function setupVideoSync(httpServer: Server) {
       }
     });
 
+    let cleanedUp = false;
     const cleanup = () => {
+      if (cleanedUp) return; // idempotente — close + error podem disparar ambos
+      cleanedUp = true;
       const sessionId = String(ws.sessionId || "");
       const room = rooms.get(sessionId);
-      if (room) {
-        room.delete(ws);
-        if (room.size === 0) {
-          rooms.delete(sessionId);
-        }
-        const roster = getRoster(room as any);
-        broadcast(room as any, { type: "presence-sync", users: roster } satisfies SyncMessage);
-        const controllers = getTextControllers(sessionId);
-        if (controllers.size) {
-          const next = new Set(Array.from(controllers).filter((id) => roster.some((u) => u.userId === id)));
-          if (next.size !== controllers.size) {
-            setTextControllers(sessionId, next);
-            broadcast(room as any, { type: "text-control:state", controllerUserIds: Array.from(next) } satisfies SyncMessage);
-          }
+      if (!room) return;
+      room.delete(ws);
+      if (room.size === 0) {
+        // Sessão vazia: libera todo o estado em memória atrelado a ela
+        rooms.delete(sessionId);
+        tempPermissions.delete(sessionId);
+        globalControlSessions.delete(sessionId);
+        textControllerSessions.delete(sessionId);
+        return;
+      }
+      const roster = getRoster(room as any);
+      broadcast(room as any, { type: "presence-sync", users: roster } satisfies SyncMessage);
+      const controllers = getTextControllers(sessionId);
+      if (controllers.size) {
+        const next = new Set(Array.from(controllers).filter((id) => roster.some((u) => u.userId === id)));
+        if (next.size !== controllers.size) {
+          setTextControllers(sessionId, next);
+          broadcast(room as any, { type: "text-control:state", controllerUserIds: Array.from(next) } satisfies SyncMessage);
         }
       }
     };

@@ -36,6 +36,7 @@ export const users = pgTable("users", {
   portfolioUrl: text("portfolio_url"),
   status: text("status").notNull().default("pending"),
   role: text("role").notNull().default("user"),
+  lastLoginAt: timestamp("last_login_at"),
   createdAt: timestamp("created_at").defaultNow(),
   updatedAt: timestamp("updated_at").defaultNow(),
 });

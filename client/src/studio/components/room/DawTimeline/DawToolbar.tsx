@@ -1,5 +1,5 @@
 import type React from "react";
-import { MousePointer2, Scissors, Play, Square, ZoomIn, ZoomOut, Trash2, Check, X, Repeat2, ChevronDown, ChevronUp, Layers } from "lucide-react";
+import { MousePointer2, Scissors, Wand2, Play, Square, ZoomIn, ZoomOut, Trash2, Check, X, Repeat2, ChevronDown, ChevronUp, Layers, SplitSquareHorizontal, SkipBack, SkipForward, ChevronsLeft, ChevronsRight } from "lucide-react";
 import type { DawTool } from "./types";
 
 interface DawToolbarProps {
@@ -30,6 +30,9 @@ interface DawToolbarProps {
   isProcessingSilence?: boolean;
   showAllTracks?: boolean;
   onToggleShowAllTracks?: () => void;
+  onSplitByLines?: () => void;
+  canSplitByLines?: boolean;
+  onNudgeClip?: (frames: number) => void;
 }
 
 // ── Estilos base ─────────────────────────────────────────────────────────────
@@ -85,6 +88,8 @@ export function DawToolbar({
   timelineCollapsed = false, onToggleTimeline,
   loopActive, loopPhase, onLoopClear, showPreview, isProcessingSilence = false,
   showAllTracks = false, onToggleShowAllTracks,
+  onSplitByLines, canSplitByLines = false,
+  onNudgeClip,
 }: DawToolbarProps) {
   return (
     <div style={{
@@ -124,12 +129,19 @@ export function DawToolbar({
         <MousePointer2 size={13} />
       </button>
       <button
+        onClick={() => onToolChange("cut")}
+        style={toolBtn(tool === "cut", "red")}
+        title="Cortar take — clique no clip para dividir (X)"
+      >
+        <Scissors size={13} />
+      </button>
+      <button
         onClick={() => onToolChange("removeSilence")}
         style={toolBtn(tool === "removeSilence" || isProcessingSilence, "red")}
         title={isProcessingSilence ? "Analisando silêncios…" : "Remover silêncio — clique no take para analisar (C)"}
         disabled={isProcessingSilence}
       >
-        <Scissors size={13} />
+        <Wand2 size={13} />
       </button>
       <button
         onClick={() => {
@@ -164,6 +176,11 @@ export function DawToolbar({
       {/* ── Ações de clip ── */}
       {selectedClipId && (
         <>
+          {canSplitByLines && onSplitByLines && (
+            <button onClick={onSplitByLines} style={actionBtn("blue")} title="Dividir take nos limites de cada fala do roteiro">
+              <SplitSquareHorizontal size={11} /> Dividir por falas
+            </button>
+          )}
           <button onClick={onDeleteClip} style={actionBtn("red")} title="Excluir take selecionado">
             <Trash2 size={11} /> Excluir
           </button>
@@ -225,6 +242,41 @@ export function DawToolbar({
           )}
         </button>
       ) : null}
+
+      {/* ── Nudge frame-a-frame — só quando há clip selecionado ── */}
+      {selectedClipId && onNudgeClip && (
+        <>
+          <div style={SEP} />
+          <button
+            onClick={() => onNudgeClip(-10)}
+            style={toolBtn(false)}
+            title="Recuar 10 frames (Alt+Shift+←)"
+          >
+            <ChevronsLeft size={13} />
+          </button>
+          <button
+            onClick={() => onNudgeClip(-1)}
+            style={toolBtn(false)}
+            title="Recuar 1 frame (Alt+←)"
+          >
+            <SkipBack size={13} />
+          </button>
+          <button
+            onClick={() => onNudgeClip(1)}
+            style={toolBtn(false)}
+            title="Avançar 1 frame (Alt+→)"
+          >
+            <SkipForward size={13} />
+          </button>
+          <button
+            onClick={() => onNudgeClip(10)}
+            style={toolBtn(false)}
+            title="Avançar 10 frames (Alt+Shift+→)"
+          >
+            <ChevronsRight size={13} />
+          </button>
+        </>
+      )}
 
       <div style={{ flex: 1 }} />
 

@@ -74,7 +74,9 @@ export interface DawTimelineProps {
   onTakeSplit?: (takeId: string, splitAt: number) => void;
   onTakeTrim?: (takeId: string, startSec: number, endSec: number) => void;
   onTakeDelete?: (takeId: string) => void;
+  onSplitByLines?: (takeId: string, boundaries: number[]) => void;
   onSamplesEdited?: (samples: Float32Array) => void;
+  onNudgeClip?: (takeId: string, frames: number) => void;
   videoRef?: React.RefObject<HTMLVideoElement | null>;
   onMuteVideo?: () => void;
   onUnmuteVideo?: () => void;
@@ -158,6 +160,7 @@ export function DawTimeline({
   onSeekToTime, onApprovalOffsetChange, onApprovalTrim, onTakeDecision,
   directorFeedback, onFeedbackChange, onDirectorPreview,
   onLoopChange, onTakeSplit, onTakeTrim, onTakeDelete, onTakeSilenceRemove,
+  onSplitByLines, onNudgeClip,
   onMuteVideo, onUnmuteVideo, onPlayVideo,
   videoRef,
   takesList = [], isDirectorOrPrivileged = false, userId,
@@ -440,6 +443,11 @@ export function DawTimeline({
     const target = e.target as HTMLElement;
     if (target.tagName === "INPUT" || target.tagName === "TEXTAREA" || target.isContentEditable) return;
     if (e.key === "v" || e.key === "V") { e.preventDefault(); daw.setTool("pointer"); }
+    if (e.key === "x" || e.key === "X") { e.preventDefault(); daw.setTool("cut"); }
+    if (e.altKey && !e.shiftKey && e.key === "ArrowLeft"  && daw.selectedClipId) { e.preventDefault(); onNudgeClip?.(daw.selectedClipId, -1); }
+    if (e.altKey && !e.shiftKey && e.key === "ArrowRight" && daw.selectedClipId) { e.preventDefault(); onNudgeClip?.(daw.selectedClipId, 1); }
+    if (e.altKey && e.shiftKey  && e.key === "ArrowLeft"  && daw.selectedClipId) { e.preventDefault(); onNudgeClip?.(daw.selectedClipId, -10); }
+    if (e.altKey && e.shiftKey  && e.key === "ArrowRight" && daw.selectedClipId) { e.preventDefault(); onNudgeClip?.(daw.selectedClipId, 10); }
     if (e.key === "c" || e.key === "C") { e.preventDefault(); daw.setTool("removeSilence"); }
     if (e.key === "l" || e.key === "L") {
       e.preventDefault();
@@ -601,6 +609,24 @@ export function DawTimeline({
     onTakeSplit?.(clipId, splitAt);
   }, [onTakeSplit]);
 
+  const handleSplitByLines = useCallback(() => {
+    if (!daw.selectedClipId || daw.selectedClipId.startsWith("pending-")) return;
+    const clip = clips.find(c => c.id === daw.selectedClipId);
+    if (!clip) return;
+    const clipEnd = clip.startTime + clip.duration;
+    const boundaries: number[] = [];
+    for (const line of scriptLines) {
+      const rel = line.start - clip.startTime;
+      if (rel > 0.05 && rel < clip.duration - 0.05) {
+        boundaries.push(rel);
+      }
+    }
+    if (boundaries.length === 0) {
+      return;
+    }
+    onSplitByLines?.(clip.id, boundaries);
+  }, [daw.selectedClipId, clips, scriptLines, onSplitByLines]);
+
   const handleTrimStart = useCallback((clipId: string, newStart: number, newDur: number) => {
     if (clipId.startsWith("pending-")) {
       onApprovalOffsetChange(newStart);
@@ -618,7 +644,10 @@ export function DawTimeline({
     }
     const take = approvedTakes.find(t => t.id === clipId);
     if (!take) return;
-    onTakeTrim?.(clipId, 0, newDur);
+    // Preserva o startSeconds atual do take para não desfazer um trim de início já aplicado.
+    // O servidor recebe (startSec, endSec) relativos ao início do arquivo WAV.
+    const currentStart = (take as any).trimStartSeconds ?? 0;
+    onTakeTrim?.(clipId, currentStart, currentStart + newDur);
   }, [approvedTakes, onApprovalTrim, onTakeTrim]);
 
   // ── Removedor de silêncio ───────────────────────────────────────────
@@ -682,6 +711,9 @@ export function DawTimeline({
           onToolChange={daw.setTool}
           onZoomIn={daw.zoomIn}
           onZoomOut={daw.zoomOut}
+          onNudgeClip={onNudgeClip && daw.selectedClipId
+            ? (frames) => onNudgeClip(daw.selectedClipId!, frames)
+            : undefined}
           selectedClipId={daw.selectedClipId}
           onDeleteClip={() => {
             if (!daw.selectedClipId) return;
@@ -709,6 +741,12 @@ export function DawTimeline({
           onToggleTimeline={() => setTimelineCollapsed(c => !c)}
           showAllTracks={showAllTracks}
           onToggleShowAllTracks={onToggleShowAllTracks}
+          onSplitByLines={onSplitByLines ? handleSplitByLines : undefined}
+          canSplitByLines={!!daw.selectedClipId && !daw.selectedClipId.startsWith("pending-") && (() => {
+            const clip = clips.find(c => c.id === daw.selectedClipId);
+            if (!clip) return false;
+            return scriptLines.some(l => { const r = l.start - clip.startTime; return r > 0.05 && r < clip.duration - 0.05; });
+          })()}
         />
 
         {/* ── Corpo (headers + ruler + clips) ── */}
@@ -953,7 +991,7 @@ export function DawTimeline({
                           status={clip.status}
                           peaks={daw.getPeaks(clip.id)}
                           isSelected={daw.selectedClipId === clip.id}
-                          isCutMode={false}
+                          isCutMode={daw.tool === "cut"}
                           isRemoveSilenceMode={daw.tool === "removeSilence"}
                           onRemoveSilence={handleRemoveSilence}
                           trackHeight={TRACK_H}

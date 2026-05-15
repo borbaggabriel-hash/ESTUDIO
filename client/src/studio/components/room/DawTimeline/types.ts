@@ -1,7 +1,7 @@
 // Tipos compartilhados do componente DAW Timeline
 
 export type Peak = { min: number; max: number };
-export type DawTool = "pointer" | "removeSilence" | "loop";
+export type DawTool = "pointer" | "cut" | "removeSilence" | "loop";
 
 // Linha do roteiro (espelho do tipo em room.tsx)
 export interface ScriptLine {

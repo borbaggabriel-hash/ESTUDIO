@@ -10,10 +10,10 @@ import { storage } from "./storage";
 import { rooms, broadcast } from "./video-sync";
 import { z } from "zod";
 import { db } from "./db";
-import { eq, and, ne, desc } from "drizzle-orm";
+import { eq, and, ne, desc, count, sql } from "drizzle-orm";
 import {
   productions, characters, takes, users, studios, sessions, studioMemberships, userStudioRoles,
-  notifications, sessionParticipants,
+  notifications, sessionParticipants, userRoles, auditLog,
   hubBanners, hubModules, hubTeachers, hubLearnings, hubTestimonials, hubFaqs, hubSettings,
   hubEnrollments, studentProfiles, studentEnrollments, studentMessages, studentInvoices,
   studentSupport, studentAgenda, studentActivity, vendedorComissoes, hubNotices,
@@ -364,12 +364,34 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     }
   });
 
+  async function checkStudioLimit(
+    studioId: string,
+    limitKey: "maxMembers" | "maxProductions" | "maxSessions",
+    statKey: "members" | "productions" | "sessions",
+    res: Response,
+  ): Promise<boolean> {
+    const profile = await storage.getStudioProfile(studioId);
+    const limit: number | null | undefined = profile?.[limitKey];
+    if (limit == null) return true;
+    const stats = await storage.getStudioStats(studioId);
+    if (stats[statKey] >= limit) {
+      const labels: Record<string, string> = {
+        maxMembers: "membros",
+        maxProductions: "producoes",
+        maxSessions: "sessoes",
+      };
+      res.status(422).json({ message: `Limite de ${labels[limitKey]} atingido para este estudio (${limit})` });
+      return false;
+    }
+    return true;
+  }
+
   // STUDIOS
   app.get("/api/studios", requireAuth, async (req, res) => {
     const user = (req as any).user!;
     const userRole = normalizePlatformRole(user.role);
     if (userRole === "platform_owner") {
-      const allStudios = await storage.getStudios();
+      const allStudios = (await storage.getStudios()).filter(s => s.isActive !== false);
       const studiosWithRoles = await Promise.all(
         allStudios.map(async (s) => ({ ...s, userRoles: [userRole] }))
       );
@@ -514,6 +536,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       if (!membership || membership.studioId !== req.params.studioId) {
         return res.status(404).json({ message: "Membro nao encontrado" });
       }
+      if (!await checkStudioLimit(req.params.studioId, "maxMembers", "members", res)) return;
       const updated = await db.transaction(async (tx) => {
         const [upd] = await tx.update(studioMemberships)
           .set({ status: "approved", role: roles[0] })
@@ -596,6 +619,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
 
       const existing = await authStorage.getUserByEmail(email);
       if (existing) return res.status(409).json({ message: "Email ja em uso" });
+      if (!await checkStudioLimit(req.params.studioId, "maxMembers", "members", res)) return;
 
       const newUser = await authStorage.createUser({
         email: email.toLowerCase().trim(),
@@ -639,6 +663,11 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
 
   app.post("/api/studios/:studioId/join", requireAuth, async (req, res) => {
     const user = (req as any).user!;
+    const targetStudio = await storage.getStudio(req.params.studioId);
+    if (!targetStudio || targetStudio.isActive === false) {
+      return res.status(403).json({ message: "Este estudio esta desativado" });
+    }
+    if (!await checkStudioLimit(req.params.studioId, "maxMembers", "members", res)) return;
     const existing = await storage.getMembershipsByUser(user.id);
     const alreadyMember = existing.some(m => m.studioId === req.params.studioId);
     if (alreadyMember) return res.status(409).json({ message: "Voce ja e membro deste estudio" });
@@ -711,6 +740,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
 
   app.post("/api/studios/:studioId/productions", requireAuth, requireStudioRole("studio_admin"), async (req, res) => {
     try {
+      if (!await checkStudioLimit(req.params.studioId, "maxProductions", "productions", res)) return;
       const input = insertProductionSchema.parse({ ...req.body, studioId: req.params.studioId });
       const prod = await storage.createProduction(input);
       res.status(201).json(prod);
@@ -806,6 +836,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
 
   app.post("/api/studios/:studioId/sessions", requireAuth, requireStudioRole("studio_admin", "diretor"), async (req, res) => {
     try {
+      if (!await checkStudioLimit(req.params.studioId, "maxSessions", "sessions", res)) return;
       const userId = (req.user as any)?.id;
       const settings = await storage.getAllSettings();
       const storageProvider = "supabase";
@@ -1136,6 +1167,35 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     } catch (err: any) {
       logger.error("[Take Trim] Error", { message: err?.message, stack: err?.stack });
       res.status(500).json({ message: err?.message || "Erro ao cortar take" });
+    }
+  });
+
+  // ── TAKES — REPOSITION (frame-nudge, sem reprocessar áudio) ────────────────
+  // Atualiza apenas startTimeSeconds na DB. O arquivo WAV não é alterado.
+  // Acessível pelo próprio dublador OU por diretores/admins.
+  app.post("/api/takes/:id/reposition", requireAuth, async (req, res) => {
+    try {
+      const { startTimeSeconds } = req.body;
+      if (typeof startTimeSeconds !== "number" || startTimeSeconds < 0) {
+        return res.status(400).json({ message: "startTimeSeconds deve ser um número >= 0" });
+      }
+
+      const [takeRecord] = await db.select().from(takes).where(eq(takes.id, req.params.id));
+      if (!takeRecord) return res.status(404).json({ message: "Take não encontrado" });
+
+      const userId = (req.user as any)?.id;
+      const userRole = (req.user as any)?.role;
+      const isAdmin = await checkTakeAdminAccess(userId, userRole, takeRecord.sessionId);
+      if (!isAdmin && takeRecord.voiceActorId !== userId) {
+        return res.status(403).json({ message: "Você só pode reposicionar seus próprios takes" });
+      }
+
+      await storage.updateTakeStartTime(takeRecord.id, startTimeSeconds);
+      logger.info("[Take Reposition] Done", { takeId: takeRecord.id, startTimeSeconds });
+      res.status(200).json({ startTimeSeconds });
+    } catch (err: any) {
+      logger.error("[Take Reposition] Error", { message: err?.message });
+      res.status(500).json({ message: err?.message || "Erro ao reposicionar take" });
     }
   });
 
@@ -2424,6 +2484,71 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     res.json({ ok: true });
   });
 
+  // ── Admin: global stats ─────────────────────────────────────────────────────
+
+  app.get("/api/hub/admin/stats", requireHubAdmin, async (_req, res) => {
+    try {
+      // Total de Alunos: mesma regra usada por /api/hub/admin/students
+      // (users cujo role normalizado é "dublador" — cobre aliases user/student/aluno)
+      const allUsers = await db.select().from(users);
+      const totalStudents = allUsers.filter(u => normalizePlatformRole(u.role) === "dublador").length;
+      const allEnrollments = await db.select().from(hubEnrollments);
+      const pendingEnrollments = allEnrollments.filter(e => (e.status ?? '').toLowerCase() === 'pendente').length;
+      const totalEnrollments = allEnrollments.length;
+      const allSupport = await db.select().from(studentSupport);
+      const openSupport = allSupport.filter(t => {
+        const s = (t.status ?? '').toLowerCase();
+        return s !== 'fechado' && s !== 'resolvido';
+      }).length;
+      const allStudios = await db.select().from(studios);
+      const activeStudios = allStudios.filter(s => (s as any).isActive !== false).length;
+      const [totalProductionsRow] = await db.select({ v: count() }).from(productions);
+      const [totalSessionsRow] = await db.select({ v: count() }).from(sessions);
+
+      const recentActivityRows = await db
+        .select()
+        .from(auditLog)
+        .orderBy(desc(auditLog.createdAt))
+        .limit(10);
+      // Hidrata com nome de quem fez a ação
+      const userMap = new Map(allUsers.map(u => [u.id, u]));
+      const recentActivity = recentActivityRows.map(a => {
+        const u = a.userId ? userMap.get(a.userId) : null;
+        const userName = (u && (u.fullName || u.displayName || u.email)) || 'Sistema';
+        return { ...a, userName };
+      });
+
+      const enrollmentsByMonthRaw = await db
+        .select({
+          monthNum: sql<number>`extract(month from ${hubEnrollments.createdAt})::int`,
+          count: count(),
+        })
+        .from(hubEnrollments)
+        .groupBy(sql`extract(month from ${hubEnrollments.createdAt})`, sql`date_trunc('month', ${hubEnrollments.createdAt})`)
+        .orderBy(sql`date_trunc('month', ${hubEnrollments.createdAt})`);
+      const PT_MONTHS = ["Jan", "Fev", "Mar", "Abr", "Mai", "Jun", "Jul", "Ago", "Set", "Out", "Nov", "Dez"];
+      const enrollmentsByMonth = enrollmentsByMonthRaw.map(r => ({
+        month: PT_MONTHS[(Number(r.monthNum) || 1) - 1] ?? "?",
+        count: r.count,
+      }));
+
+      res.json({
+        totalStudents,
+        pendingEnrollments,
+        totalEnrollments,
+        openSupportTickets: openSupport,
+        activeStudios,
+        totalProductions: totalProductionsRow?.v ?? 0,
+        totalSessions: totalSessionsRow?.v ?? 0,
+        recentActivity,
+        enrollmentsByMonth,
+      });
+    } catch (err) {
+      logger.error('stats error', err as any);
+      res.status(500).json({ message: 'Erro ao buscar stats' });
+    }
+  });
+
   // ── Admin: alunos ──────────────────────────────────────────────────────────
 
   // Alunos = users cujo role normalizado é "dublador" (cobre aliases: user, student, aluno, etc.)
@@ -2532,8 +2657,16 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
 
   app.patch("/api/hub/admin/enrollments/:id", requireHubAdmin, async (req, res) => {
     try {
+      const patch = z.object({
+        status: z.string().optional(),
+        notes: z.string().optional(),
+        module: z.string().optional(),
+        moduleSlug: z.string().optional(),
+        phone: z.string().optional(),
+        progress: z.number().optional(),
+      }).parse(req.body);
       const [updated] = await db.update(hubEnrollments)
-        .set(req.body)
+        .set(patch)
         .where(eq(hubEnrollments.id, req.params.id))
         .returning();
       res.json(updated);
@@ -2586,8 +2719,13 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
   app.patch("/api/hub/admin/support/:id", requireHubAdmin, async (req, res) => {
     try {
       const adminReply = req.body.adminReply ?? req.body.admin_reply;
+      const update: Record<string, any> = { updatedAt: new Date() };
+      if (adminReply !== undefined) update.adminReply = adminReply;
+      if (req.body.status !== undefined) update.status = req.body.status;
+      else if (adminReply !== undefined) update.status = "Respondido";
+      if (typeof req.body.priority === "string") update.priority = req.body.priority || null;
       const [updated] = await db.update(studentSupport)
-        .set({ adminReply, status: req.body.status ?? "Respondido", updatedAt: new Date() })
+        .set(update)
         .where(eq(studentSupport.id, req.params.id))
         .returning();
       res.json(updated);
@@ -2682,13 +2820,104 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
   });
 
   app.delete("/api/hub/admin/students/:uid", requireHubAdmin, async (req, res) => {
+    const uid = req.params.uid;
     try {
-      // Demote dublador → user + status pending (inativo), preserva conta Estudio
-      await db.update(users).set({ role: "user", status: "pending" } as any).where(eq(users.id, req.params.uid));
-      await db.delete(studentProfiles).where(eq(studentProfiles.userId, req.params.uid));
+      // 1. Nullify FK references without onDelete cascade
+      await db.update(takes).set({ voiceActorId: null } as any).where(eq((takes as any).voiceActorId, uid));
+      await db.update(takes).set({ reviewedBy: null } as any).where(eq((takes as any).reviewedBy, uid));
+      await db.update(characters).set({ voiceActorId: null } as any).where(eq((characters as any).voiceActorId, uid));
+      await db.update(sessions).set({ createdBy: null } as any).where(eq((sessions as any).createdBy, uid));
+      await db.update(auditLog).set({ userId: null } as any).where(eq(auditLog.userId, uid));
+      // 2. Delete rows that reference users without cascade
+      await db.delete(sessionParticipants).where(eq(sessionParticipants.userId, uid));
+      await db.delete(studioMemberships).where(eq(studioMemberships.userId, uid));
+      await db.delete(notifications).where(eq(notifications.userId, uid));
+      await db.delete(userRoles).where(eq(userRoles.userId, uid));
+      // 3. Delete user — cascade removes studentProfiles, studentEnrollments,
+      //    studentMessages, studentInvoices, studentSupport, studentAgenda,
+      //    studentActivity, vendedorComissoes. hubEnrollments.studentId set null by DB.
+      await db.delete(users).where(eq(users.id, uid));
       res.json({ ok: true });
     } catch (err: any) {
-      res.status(400).json({ message: err.message });
+      res.status(500).json({ message: err.message });
+    }
+  });
+
+  // ── Admin: estúdios ──────────────────────────────────────────────────────────
+
+  app.get("/api/hub/admin/studios", requireHubAdmin, async (_req, res) => {
+    try {
+      const allStudios = await storage.getStudios();
+      const withStats = await Promise.all(allStudios.map(async (s) => {
+        const stats = await storage.getStudioStats(s.id);
+        const profile = await storage.getStudioProfile(s.id);
+        const limits = { maxMembers: profile?.maxMembers ?? null, maxProductions: profile?.maxProductions ?? null, maxSessions: profile?.maxSessions ?? null };
+        return { ...s, stats, limits };
+      }));
+      res.json(withStats);
+    } catch (err: any) {
+      res.status(500).json({ message: err.message });
+    }
+  });
+
+  app.patch("/api/hub/admin/studios/:id", requireHubAdmin, async (req, res) => {
+    try {
+      const { name, isActive, description, maxMembers, maxProductions, maxSessions } = req.body;
+      const update: Record<string, any> = {};
+      if (name !== undefined) update.name = name;
+      if (isActive !== undefined) update.isActive = isActive;
+      if (description !== undefined) update.description = description;
+      if (Object.keys(update).length > 0) {
+        await db.update(studios).set(update).where(eq(studios.id, req.params.id));
+      }
+      if (maxMembers !== undefined || maxProductions !== undefined || maxSessions !== undefined) {
+        const limitPatch: Record<string, any> = {};
+        if (maxMembers !== undefined) limitPatch.maxMembers = maxMembers;
+        if (maxProductions !== undefined) limitPatch.maxProductions = maxProductions;
+        if (maxSessions !== undefined) limitPatch.maxSessions = maxSessions;
+        await storage.upsertStudioProfile(req.params.id, limitPatch);
+      }
+      const [updated] = await db.select().from(studios).where(eq(studios.id, req.params.id));
+      res.json(updated ?? { ok: true });
+    } catch (err: any) {
+      res.status(500).json({ message: err.message });
+    }
+  });
+
+  app.get("/api/hub/admin/studios/:id/members", requireHubAdmin, async (req, res) => {
+    try {
+      const members = await storage.getStudioMemberships(req.params.id);
+      const withRoles = await Promise.all(members.map(async (m) => {
+        const roles = await storage.getUserStudioRoles(m.id);
+        return { ...m, studioRoles: roles.map(r => r.role) };
+      }));
+      res.json(withRoles);
+    } catch (err: any) {
+      res.status(500).json({ message: err.message });
+    }
+  });
+
+  app.patch("/api/hub/admin/studios/:id/members/:mid/role", requireHubAdmin, async (req, res) => {
+    try {
+      const { roles } = req.body;
+      if (!Array.isArray(roles) || roles.length === 0) {
+        return res.status(400).json({ message: "roles é obrigatório" });
+      }
+      await storage.setUserStudioRoles(req.params.mid, roles);
+      await storage.updateMembershipStatus(req.params.mid, "approved", roles[0]);
+      res.json({ ok: true });
+    } catch (err: any) {
+      res.status(500).json({ message: err.message });
+    }
+  });
+
+  app.delete("/api/hub/admin/studios/:id/members/:mid", requireHubAdmin, async (req, res) => {
+    try {
+      await db.delete(userStudioRoles).where(eq(userStudioRoles.membershipId, req.params.mid));
+      await db.delete(studioMemberships).where(eq(studioMemberships.id, req.params.mid));
+      res.json({ ok: true });
+    } catch (err: any) {
+      res.status(500).json({ message: err.message });
     }
   });
 
@@ -2801,8 +3030,20 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
 
   app.post("/api/hub/admin/notices", requireHubAdmin, async (req, res) => {
     try {
-      const { title, body } = z.object({ title: z.string().min(1), body: z.string().min(1) }).parse(req.body);
-      const [row] = await db.insert(hubNotices).values({ id: randomUUID(), title, body }).returning();
+      const parsed = z.object({
+        title: z.string().min(1),
+        body: z.string().min(1),
+        segment: z.enum(["todos", "modulo", "status"]).optional(),
+        moduleFilter: z.string().optional(),
+        statusFilter: z.string().optional(),
+        scheduledAt: z.string().optional(),
+      }).parse(req.body);
+      const { scheduledAt, ...rest } = parsed;
+      const [row] = await db.insert(hubNotices).values({
+        id: randomUUID(),
+        ...rest,
+        ...(scheduledAt ? { scheduledAt: new Date(scheduledAt) } : {}),
+      }).returning();
       res.status(201).json(row);
     } catch (err: any) {
       res.status(400).json({ message: err.message });

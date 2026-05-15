@@ -328,6 +328,7 @@ export const hubEnrollments = pgTable("hub_enrollments", {
   moduleSlug: text("module_slug"),
   status: text("status").default("Pendente"),
   progress: integer("progress").default(0),
+  notes: text("notes").default(""),
   createdAt: timestamp("created_at").defaultNow(),
 });
 
@@ -389,6 +390,7 @@ export const studentSupport = pgTable("student_support", {
   email: text("email"),
   name: text("name"),
   status: text("status").default("Aberto"),
+  priority: text("priority"),
   adminReply: text("admin_reply").default(""),
   createdAt: timestamp("created_at").defaultNow(),
   updatedAt: timestamp("updated_at"),
@@ -417,6 +419,11 @@ export const hubNotices = pgTable("hub_notices", {
   id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
   title: text("title").notNull(),
   body: text("body").notNull(),
+  segment: text("segment").default("todos"),
+  moduleFilter: text("module_filter"),
+  statusFilter: text("status_filter"),
+  scheduledAt: timestamp("scheduled_at"),
+  readBy: jsonb("read_by").default(sql`'[]'::jsonb`),
   createdAt: timestamp("created_at").defaultNow(),
 });
 

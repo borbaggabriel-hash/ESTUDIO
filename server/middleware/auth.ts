@@ -72,14 +72,20 @@ export async function requireStudioAccess(req: Request, res: Response, next: Nex
   const user = req.user as any;
   if (!user) return res.status(401).json({ message: "Unauthorized" });
 
-  if (normalizePlatformRole(user.role) === "platform_owner") {
-    req.studioRole = "platform_owner";
-    req.studioRoles = ["platform_owner"];
-    return next();
-  }
-
   try {
     const { storage } = await import("../storage");
+
+    if (normalizePlatformRole(user.role) === "platform_owner") {
+      req.studioRole = "platform_owner";
+      req.studioRoles = ["platform_owner"];
+      return next();
+    }
+
+    const studio = await storage.getStudio(studioId);
+    if (!studio || studio.isActive === false) {
+      return res.status(403).json({ message: "Este estudio esta desativado" });
+    }
+
     const roles = (await storage.getUserRolesInStudio(user.id, studioId)).map(normalizeStudioRole);
     if (roles.length === 0) {
       logger.warn("Unauthorized studio access attempt", { userId: user.id, studioId });
@@ -102,14 +108,20 @@ export function requireStudioRole(...allowedRoles: string[]) {
     const user = req.user as any;
     if (!user) return res.status(401).json({ message: "Unauthorized" });
 
-    if (normalizePlatformRole(user.role) === "platform_owner") {
-      req.studioRole = "platform_owner";
-      req.studioRoles = ["platform_owner"];
-      return next();
-    }
-
     try {
       const { storage } = await import("../storage");
+
+      if (normalizePlatformRole(user.role) === "platform_owner") {
+        req.studioRole = "platform_owner";
+        req.studioRoles = ["platform_owner"];
+        return next();
+      }
+
+      const studio = await storage.getStudio(studioId);
+      if (!studio || studio.isActive === false) {
+        return res.status(403).json({ message: "Este estudio esta desativado" });
+      }
+
       const roles = (await storage.getUserRolesInStudio(user.id, studioId)).map(normalizeStudioRole);
       if (roles.length === 0) {
         return res.status(403).json({ message: "Voce nao tem acesso a este estudio" });

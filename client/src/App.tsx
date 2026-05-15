@@ -40,7 +40,7 @@ const HubSchoolCourse = lazyWithRetry(() => import("@/pages/hubschool-course"));
 const HubAlign = lazyWithRetry(() => import("@/pages/hub-align"));
 
 // Studio Pages (imported from the HUBDUB-STUDIO folder)
-const Login = lazyWithRetry(() => import("@studio/pages/logindesativado"));
+const Login = lazyWithRetry(() => import("@studio/pages/login"));
 const StudioSelect = lazyWithRetry(() => import("@studio/pages/studio-select"));
 const Dashboard = lazyWithRetry(() => import("@studio/pages/dashboard"));
 const Productions = lazyWithRetry(() => import("@studio/pages/productions"));

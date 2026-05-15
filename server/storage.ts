@@ -212,7 +212,7 @@ export class DatabaseStorage implements IStorage {
       .where(and(eq(studioMemberships.userId, userId), eq(studioMemberships.status, "approved")));
     if (memberships.length === 0) return [];
     const studioIds = memberships.map(m => m.studioId);
-    return await db.select().from(studios).where(inArray(studios.id, studioIds));
+    return await db.select().from(studios).where(and(inArray(studios.id, studioIds), eq(studios.isActive, true)));
   }
 
   async getStudio(id: string): Promise<Studio | undefined> {

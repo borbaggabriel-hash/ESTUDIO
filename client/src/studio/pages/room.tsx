@@ -32,6 +32,8 @@ import {
   GripHorizontal,
   Clock,
   ExternalLink,
+  RefreshCw,
+  LayoutTemplate,
 } from "lucide-react";
 import { useToast } from "@studio/hooks/use-toast";
 import { useAuth } from "@studio/hooks/use-auth";
@@ -184,6 +186,297 @@ function FloatingPanel({ title, onClose, initialWidth = 480, initialHeight = 320
     document.body
   );
 }
+// ── Floating Video Panel (custom PiP — free positioning, no corner snap) ──────
+interface FloatingVideoPanelProps {
+  onClose: () => void;
+  isMuted: boolean;
+  onToggleMute: () => void;
+  children: React.ReactNode;
+}
+
+function FloatingVideoPanel({ onClose, isMuted, onToggleMute, children }: FloatingVideoPanelProps) {
+  const panelRef = useRef<HTMLDivElement>(null);
+  const initialW = 480;
+  const initialH = 270 + 36;
+  const posRef = useRef({
+    x: Math.max(20, (window.innerWidth - initialW) / 2),
+    y: Math.max(20, (window.innerHeight - initialH) / 2),
+  });
+  const sizeRef = useRef({ w: initialW, h: initialH });
+  const dragRef = useRef<{ startX: number; startY: number; origX: number; origY: number } | null>(null);
+  const resizeRef = useRef<{ startX: number; startY: number; origW: number; origH: number } | null>(null);
+
+  const applyTransform = useCallback(() => {
+    if (!panelRef.current) return;
+    panelRef.current.style.left = `${posRef.current.x}px`;
+    panelRef.current.style.top = `${posRef.current.y}px`;
+    panelRef.current.style.width = `${sizeRef.current.w}px`;
+    panelRef.current.style.height = `${sizeRef.current.h}px`;
+  }, []);
+
+  useEffect(() => { applyTransform(); }, [applyTransform]);
+
+  const onDragDown = useCallback((e: React.PointerEvent) => {
+    e.currentTarget.setPointerCapture(e.pointerId);
+    dragRef.current = { startX: e.clientX, startY: e.clientY, origX: posRef.current.x, origY: posRef.current.y };
+  }, []);
+
+  const onDragMove = useCallback((e: React.PointerEvent) => {
+    if (!dragRef.current) return;
+    posRef.current = {
+      x: Math.max(0, dragRef.current.origX + e.clientX - dragRef.current.startX),
+      y: Math.max(0, dragRef.current.origY + e.clientY - dragRef.current.startY),
+    };
+    applyTransform();
+  }, [applyTransform]);
+
+  const onDragUp = useCallback(() => { dragRef.current = null; }, []);
+
+  const onResizeDown = useCallback((e: React.PointerEvent) => {
+    e.stopPropagation();
+    e.currentTarget.setPointerCapture(e.pointerId);
+    resizeRef.current = { startX: e.clientX, startY: e.clientY, origW: sizeRef.current.w, origH: sizeRef.current.h };
+  }, []);
+
+  const onResizeMove = useCallback((e: React.PointerEvent) => {
+    if (!resizeRef.current) return;
+    sizeRef.current = {
+      w: Math.max(240, resizeRef.current.origW + e.clientX - resizeRef.current.startX),
+      h: Math.max(180, resizeRef.current.origH + e.clientY - resizeRef.current.startY),
+    };
+    applyTransform();
+  }, [applyTransform]);
+
+  const onResizeUp = useCallback(() => { resizeRef.current = null; }, []);
+
+  return createPortal(
+    <div
+      ref={panelRef}
+      style={{
+        position: "fixed",
+        zIndex: 9997,
+        borderRadius: 12,
+        overflow: "hidden",
+        boxShadow: "0 8px 48px rgba(0,0,0,0.75), 0 0 0 1px rgba(255,255,255,0.09)",
+        background: "#000",
+        display: "flex",
+        flexDirection: "column",
+        minWidth: 240,
+        minHeight: 180,
+      }}
+    >
+      <div
+        style={{ height: 36, background: "rgba(12,14,24,0.97)", cursor: "grab", display: "flex", alignItems: "center", justifyContent: "space-between", paddingLeft: 10, paddingRight: 8, userSelect: "none", borderBottom: "1px solid rgba(255,255,255,0.07)", flexShrink: 0 }}
+        onPointerDown={onDragDown}
+        onPointerMove={onDragMove}
+        onPointerUp={onDragUp}
+      >
+        <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+          <GripHorizontal style={{ width: 13, height: 13, color: "rgba(255,255,255,0.22)" }} />
+          <span style={{ fontSize: 11, fontWeight: 600, letterSpacing: "0.05em", textTransform: "uppercase", color: "rgba(255,255,255,0.38)" }}>Vídeo</span>
+        </div>
+        <div style={{ display: "flex", alignItems: "center", gap: 4 }}>
+          <button
+            onPointerDown={(e) => e.stopPropagation()}
+            onClick={onToggleMute}
+            style={{ width: 26, height: 26, borderRadius: 6, display: "flex", alignItems: "center", justifyContent: "center", background: "rgba(255,255,255,0.06)", border: "none", cursor: "pointer", color: "rgba(255,255,255,0.45)" }}
+            title={isMuted ? "Ativar som" : "Mutar"}
+          >
+            {isMuted ? <VolumeX style={{ width: 12, height: 12 }} /> : <Volume2 style={{ width: 12, height: 12 }} />}
+          </button>
+          <button
+            onPointerDown={(e) => e.stopPropagation()}
+            onClick={onClose}
+            style={{ width: 26, height: 26, borderRadius: 6, display: "flex", alignItems: "center", justifyContent: "center", background: "rgba(255,255,255,0.06)", border: "none", cursor: "pointer", color: "rgba(255,255,255,0.45)" }}
+            title="Recolher vídeo"
+          >
+            <Minimize2 style={{ width: 11, height: 11 }} />
+          </button>
+        </div>
+      </div>
+      <div style={{ flex: 1, overflow: "hidden", position: "relative", background: "#000" }}>
+        {children}
+      </div>
+      <div
+        style={{ position: "absolute", bottom: 0, right: 0, width: 20, height: 20, cursor: "nwse-resize", zIndex: 1 }}
+        onPointerDown={onResizeDown}
+        onPointerMove={onResizeMove}
+        onPointerUp={onResizeUp}
+      >
+        <svg width="12" height="12" viewBox="0 0 12 12" style={{ position: "absolute", bottom: 3, right: 3, opacity: 0.25 }}>
+          <path d="M11 1 1 11M11 5 5 11M11 9 9 11" stroke="white" strokeWidth="1.5" strokeLinecap="round"/>
+        </svg>
+      </div>
+    </div>,
+    document.body
+  );
+}
+// ── UnifiedPipWindowContent ──────────────────────────────────────────────────
+// Conteúdo renderizado dentro de um popup real de OS (via createPortal).
+// O popup pode ser movido livremente entre monitores pelo usuário.
+// Vídeo mirror sincronizado via RAF com o videoRef do documento principal.
+
+interface UnifiedPipProps {
+  videoRef: React.RefObject<HTMLVideoElement | null>;
+  videoSrc: string | undefined;
+  isMuted: boolean;
+  onToggleMute: () => void;
+  scriptLines: Array<{ character: string; start: number; text: string; end?: number }>;
+  currentLines: Set<number>;
+  lineEdits: Record<number, string>;
+  scriptFontScale: number;
+  autoFollow: boolean;
+  onClose: () => void;
+}
+
+function UnifiedPipPanel({
+  videoRef,
+  videoSrc,
+  isMuted,
+  onToggleMute,
+  scriptLines,
+  currentLines,
+  lineEdits,
+  scriptFontScale,
+  autoFollow,
+  onClose,
+}: UnifiedPipProps) {
+  const mirrorVideoRef = useRef<HTMLVideoElement>(null);
+  const scriptRef = useRef<HTMLDivElement>(null);
+  const tcRef = useRef<HTMLSpanElement>(null);
+
+  // Sincroniza mirror video com o video principal via RAF
+  useEffect(() => {
+    let raf: number;
+    const sync = () => {
+      const main = videoRef.current;
+      const mirror = mirrorVideoRef.current;
+      if (main && mirror) {
+        if (!main.paused && mirror.paused) mirror.play().catch(() => {});
+        if (main.paused && !mirror.paused) mirror.pause();
+        if (Math.abs(mirror.currentTime - main.currentTime) > 0.5) {
+          mirror.currentTime = main.currentTime;
+        }
+      }
+      const t = mirrorVideoRef.current?.currentTime ?? videoRef.current?.currentTime ?? 0;
+      if (tcRef.current) tcRef.current.textContent = formatTimecode(t);
+      raf = requestAnimationFrame(sync);
+    };
+    raf = requestAnimationFrame(sync);
+    return () => cancelAnimationFrame(raf);
+  }, [videoRef]);
+
+  // ── Auto-scroll roteiro para linha ativa ───────────────────────────────────
+  const activeLineIdx = useMemo(() => {
+    const arr = Array.from(currentLines);
+    return arr.length > 0 ? arr[0] : -1;
+  }, [currentLines]);
+
+  useEffect(() => {
+    if (!autoFollow) return;
+    if (activeLineIdx < 0 || !scriptRef.current) return;
+    const el = scriptRef.current.querySelector<HTMLElement>(`[data-pip-line="${activeLineIdx}"]`);
+    if (el) el.scrollIntoView({ behavior: "smooth", block: "center" });
+  }, [activeLineIdx, autoFollow]);
+
+  const BORDER_COL = "rgba(255,255,255,0.07)";
+  const ACCENT     = "#6366f1";
+
+  return (
+    <div style={{ width: "100%", height: "100vh", display: "flex", flexDirection: "column", background: "#07090f", fontFamily: "system-ui,-apple-system,sans-serif", overflow: "hidden" }}>
+      {/* Header */}
+      <div style={{ height: 36, flexShrink: 0, display: "flex", alignItems: "center", justifyContent: "space-between", padding: "0 10px 0 12px", background: "rgba(12,16,28,0.98)", borderBottom: `1px solid ${BORDER_COL}` }}>
+        <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+          <LayoutTemplate style={{ width: 12, height: 12, color: ACCENT }} />
+          <span style={{ fontSize: 10, fontWeight: 700, letterSpacing: "0.1em", textTransform: "uppercase", color: ACCENT }}>Studio PiP</span>
+        </div>
+        <div style={{ display: "flex", alignItems: "center", gap: 4 }}>
+          <button onClick={onToggleMute} style={{ width: 26, height: 26, borderRadius: 6, display: "flex", alignItems: "center", justifyContent: "center", background: "rgba(255,255,255,0.05)", border: "none", cursor: "pointer", color: "rgba(255,255,255,0.45)" }} title={isMuted ? "Ativar som" : "Mutar"}>
+            {isMuted ? <VolumeX style={{ width: 12, height: 12 }} /> : <Volume2 style={{ width: 12, height: 12 }} />}
+          </button>
+          <button onClick={onClose} style={{ width: 26, height: 26, borderRadius: 6, display: "flex", alignItems: "center", justifyContent: "center", background: "rgba(255,255,255,0.05)", border: "none", cursor: "pointer", color: "rgba(255,255,255,0.45)" }} title="Fechar Studio PiP">
+            <Minimize2 style={{ width: 11, height: 11 }} />
+          </button>
+        </div>
+      </div>
+      {/* Body: vídeo + roteiro */}
+      <div style={{ flex: 1, display: "flex", overflow: "hidden", minHeight: 0 }}>
+        {/* Coluna vídeo + timecode */}
+        <div style={{ flex: "0 0 50%", display: "flex", flexDirection: "column", background: "#000", overflow: "hidden" }}>
+          <div style={{ flex: 1, minHeight: 0, position: "relative" }}>
+            {videoSrc ? (
+              <video ref={mirrorVideoRef} src={videoSrc} style={{ width: "100%", height: "100%", objectFit: "contain", display: "block" }} muted={isMuted} playsInline />
+            ) : (
+              <div style={{ width: "100%", height: "100%", display: "flex", alignItems: "center", justifyContent: "center", color: "rgba(255,255,255,0.3)", fontSize: 12 }}>Sem vídeo</div>
+            )}
+          </div>
+          <div style={{ flexShrink: 0, padding: "6px 0", background: "rgba(0,0,0,0.92)", borderTop: `1px solid ${BORDER_COL}`, display: "flex", alignItems: "center", justifyContent: "center" }}>
+            <span ref={tcRef} style={{ fontFamily: "monospace", fontWeight: 800, fontSize: 32, color: "#fff", letterSpacing: "0.08em", lineHeight: 1 }}>00:00:00</span>
+          </div>
+        </div>
+        {/* Coluna roteiro */}
+        <div ref={scriptRef} style={{ flex: 1, overflowY: "auto", background: "#0a0d16", padding: "12px 14px" }}>
+          {scriptLines.length === 0 ? (
+            <div style={{ display: "flex", alignItems: "center", justifyContent: "center", height: "100%", color: "rgba(255,255,255,0.2)", fontSize: 12 }}>Nenhum roteiro</div>
+          ) : scriptLines.map((line, i) => {
+            const isActive = currentLines.has(i);
+            const highlighted = autoFollow ? isActive : true;
+            return (
+              <div key={i} data-pip-line={i} style={{ marginBottom: 10, padding: "12px 16px", borderRadius: 10, background: highlighted ? "#ffffff" : "rgba(255,255,255,0.05)", borderLeft: highlighted ? `4px solid ${isActive ? ACCENT : "#94a3b8"}` : "4px solid transparent", boxShadow: highlighted ? "0 1px 8px rgba(0,0,0,0.30)" : "none", transition: "background 0.3s, border-color 0.3s" }}>
+                <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 5 }}>
+                  <span style={{ fontSize: 11, fontFamily: "monospace", fontWeight: 600, color: highlighted ? "#64748b" : "rgba(255,255,255,0.35)" }}>{formatTimecode(line.start)}</span>
+                  <span style={{ fontSize: Math.round(12 * scriptFontScale), fontWeight: 800, textTransform: "uppercase", letterSpacing: "0.6px", color: highlighted ? (isActive ? ACCENT : "#334155") : "rgba(255,255,255,0.35)" }}>{line.character}</span>
+                </div>
+                <p style={{ margin: 0, fontSize: Math.round(15 * scriptFontScale), lineHeight: 1.6, color: highlighted ? "#000000" : "rgba(255,255,255,0.80)", fontWeight: highlighted ? 600 : 400 }}>{lineEdits[i] ?? line.text}</p>
+              </div>
+            );
+          })}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// Timecode compacto para o header do UnifiedPipPanel (sem estilos de font gigante)
+function _InlinePipTimecode({ videoRef }: { videoRef: React.RefObject<HTMLVideoElement | null> }) {
+  const spanRef = useRef<HTMLSpanElement>(null);
+  useEffect(() => {
+    let raf: number;
+    const tick = () => {
+      const t = videoRef.current?.currentTime ?? 0;
+      if (spanRef.current) spanRef.current.textContent = formatTimecode(t);
+      raf = requestAnimationFrame(tick);
+    };
+    raf = requestAnimationFrame(tick);
+    return () => cancelAnimationFrame(raf);
+  }, [videoRef]);
+  return (
+    <span ref={spanRef} style={{ fontFamily: "monospace", fontWeight: 700, fontSize: 13, color: "rgba(255,255,255,0.7)", letterSpacing: "0.06em" }}>
+      00:00:00
+    </span>
+  );
+}
+
+// Timecode grande posicionado abaixo do vídeo no UnifiedPipPanel
+function _BigPipTimecode({ videoRef }: { videoRef: React.RefObject<HTMLVideoElement | null> }) {
+  const spanRef = useRef<HTMLSpanElement>(null);
+  useEffect(() => {
+    let raf: number;
+    const tick = () => {
+      const t = videoRef.current?.currentTime ?? 0;
+      if (spanRef.current) spanRef.current.textContent = formatTimecode(t);
+      raf = requestAnimationFrame(tick);
+    };
+    raf = requestAnimationFrame(tick);
+    return () => cancelAnimationFrame(raf);
+  }, [videoRef]);
+  return (
+    <span ref={spanRef} style={{ fontFamily: "monospace", fontWeight: 800, fontSize: 32, color: "#ffffff", letterSpacing: "0.08em", lineHeight: 1 }}>
+      00:00:00
+    </span>
+  );
+}
+
 // ─────────────────────────────────────────────────────────────────────────────
 
 interface ScriptLine {
@@ -668,6 +961,7 @@ export default function RecordingRoom() {
   const [scriptFloating, setScriptFloating] = useState(false);
   const [scriptPipWindow, setScriptPipWindow] = useState<Window | null>(null);
   const [timecodePipWindow, setTimecodePipWindow] = useState<Window | null>(null);
+  const [unifiedPipWindow, setUnifiedPipWindow] = useState<Window | null>(null);
   const [timecodeVisible, setTimecodeVisible] = useState(true);
   const [deviceSettings, setDeviceSettings] = useState<DeviceSettings>(() => {
     const defaults: DeviceSettings = { inputDeviceId: "", outputDeviceId: "", inputGain: 1, monitorVolume: 0.8, voiceCaptureMode: "original" };
@@ -730,12 +1024,9 @@ export default function RecordingRoom() {
         }
       });
 
-      const sorted = normalized
-        .map((line, origIdx) => ({ ...line, _origIdx: origIdx }))
-        .sort((a, b) => a.start !== b.start ? a.start - b.start : a._origIdx - b._origIdx);
-      return sorted.map((line, i) => ({
+      return normalized.map((line, i) => ({
         ...line,
-        end: Math.max(sorted[i + 1]?.start ?? (line.start + 10), line.start + 0.001),
+        end: Math.max(normalized[i + 1]?.start ?? (line.start + 10), line.start + 0.001),
       }));
     } catch (e) {
       console.error("[Room] Failed to parse scriptJson:", e);
@@ -824,7 +1115,7 @@ export default function RecordingRoom() {
   });
 
   const updateScriptLineMutation = useMutation({
-    mutationFn: async ({ lineIndex, text }: { lineIndex: number; text: string }) => {
+    mutationFn: async ({ lineIndex, text, character, timecode }: { lineIndex: number; text: string; character?: string; timecode?: string }) => {
       if (!production?.id || !production?.scriptJson) throw new Error("Roteiro nao carregado");
       const target = scriptLines[lineIndex];
       if (!target) throw new Error("Linha invalida");
@@ -833,30 +1124,48 @@ export default function RecordingRoom() {
       const rawLines: Array<any> = Array.isArray(parsed) ? parsed : (parsed?.lines && Array.isArray(parsed.lines) ? parsed.lines : []);
       if (!rawLines.length) throw new Error("Formato de roteiro invalido");
 
-      const idx = rawLines.findIndex((l: any) => {
-        const rawTime = l.tempo ?? l.start ?? l.timecode ?? l.tc ?? "00:00:00";
-        const st = typeof l.tempoEmSegundos === "number" && Number.isFinite(l.tempoEmSegundos)
-          ? toSeconds3(l.tempoEmSegundos)
-          : (() => {
-              try {
-                return toSeconds3(parseUniversalTimecodeToSeconds(rawTime, 24));
-              } catch {
-                return toSeconds3(parseTimecode(rawTime));
-              }
-            })();
-        const ch = String(l.character || l.personagem || l.char || "");
-        return Math.abs(st - target.start) <= 0.0005 && ch.toLowerCase() === String(target.character || "").toLowerCase();
-      });
-      const targetIdx = idx >= 0 ? idx : lineIndex;
-      if (!rawLines[targetIdx]) throw new Error("Linha nao encontrada no roteiro");
+      // Localiza a linha pelo índice direto (após remoção do sort, índice é confiável)
+      const targetIdx = lineIndex < rawLines.length ? lineIndex : -1;
+      if (targetIdx < 0 || !rawLines[targetIdx]) throw new Error("Linha nao encontrada no roteiro");
 
       const updatedLine = { ...rawLines[targetIdx] };
-      if ("text" in updatedLine) {
-        updatedLine.text = text;
-      } else if ("fala" in updatedLine) {
+
+      // Atualiza texto — preserva chave original do JSON
+      if ("fala" in updatedLine) {
         updatedLine.fala = text;
       } else {
         updatedLine.text = text;
+      }
+
+      // Atualiza personagem — preserva chave original do JSON
+      if (character !== undefined && character.trim() !== "") {
+        if ("personagem" in updatedLine) {
+          updatedLine.personagem = character.trim();
+        } else {
+          updatedLine.character = character.trim();
+        }
+      }
+
+      // Atualiza minutagem — preserva chave original do JSON
+      if (timecode !== undefined && timecode.trim() !== "") {
+        const newTc = timecode.trim();
+        if ("tempo" in updatedLine) {
+          updatedLine.tempo = newTc;
+        } else if ("timecode" in updatedLine) {
+          updatedLine.timecode = newTc;
+        } else if ("tc" in updatedLine) {
+          updatedLine.tc = newTc;
+        } else {
+          updatedLine.start = newTc;
+        }
+        // Recalcula tempoEmSegundos se existia
+        if ("tempoEmSegundos" in updatedLine) {
+          try {
+            updatedLine.tempoEmSegundos = parseUniversalTimecodeToSeconds(newTc, 24);
+          } catch {
+            updatedLine.tempoEmSegundos = parseTimecode(newTc);
+          }
+        }
       }
 
       const nextLines = [...rawLines];
@@ -875,6 +1184,8 @@ export default function RecordingRoom() {
       setLineEdits((prev) => ({ ...prev, [variables.lineIndex]: variables.text }));
       setEditingLineIndex(null);
       setEditingLineText("");
+      setEditingLineCharacter("");
+      setEditingLineTimecode("");
       queryClient.invalidateQueries({ queryKey: ["/api/studios", studioId, "productions", production?.id] });
       toast({ title: "Linha atualizada" });
     },
@@ -975,6 +1286,7 @@ export default function RecordingRoom() {
   const loopStartRef = useRef<number>(0);
   const isRemoteAction = useRef(false);
   const wsReconnectTimer = useRef<NodeJS.Timeout | null>(null);
+  const previewUrlRef = useRef<string | null>(null);
 
   useEffect(() => {
     const doc = document as any;
@@ -1025,6 +1337,9 @@ export default function RecordingRoom() {
   const [editingTakeId, setEditingTakeId] = useState<string | null>(null);
   const [editingLineIndex, setEditingLineIndex] = useState<number | null>(null);
   const [editingLineText, setEditingLineText] = useState("");
+  const [editingLineCharacter, setEditingLineCharacter] = useState("");
+  const [editingLineTimecode, setEditingLineTimecode] = useState("");
+  const [reRecordConfirmIndex, setReRecordConfirmIndex] = useState<number | null>(null);
   const [lineEdits, setLineEdits] = useState<Record<number, string>>({});
   const [takePreviewId, setTakePreviewId] = useState<string | null>(null);
   const takePreviewAudioRef = useRef<HTMLAudioElement | null>(null);
@@ -1052,6 +1367,7 @@ export default function RecordingRoom() {
   // Acumulador de perfis de dubladores conhecidos (cresce, nunca encolhe)
   const [knownVoiceActors, setKnownVoiceActors] = useState<Map<string, { voiceActorId: string; voiceActorName: string; characterName: string }>>(() => new Map());
   const [optimisticApproved, setOptimisticApproved] = useState<ApprovedTake[]>([]);
+  const [optimisticStartTimes, setOptimisticStartTimes] = useState<Record<string, number>>({});
   const [showAllTracks, setShowAllTracks] = useState(false);
 
 
@@ -1170,10 +1486,12 @@ export default function RecordingRoom() {
       if (wsReconnectTimer.current) clearTimeout(wsReconnectTimer.current);
       if (scriptUserScrollIntentTimerRef.current) clearTimeout(scriptUserScrollIntentTimerRef.current);
       
-      // Cleanup preview URLs to prevent memory leaks
-      if (previewUrl) {
+      // Cleanup preview URLs to prevent memory leaks (usa ref para evitar stale closure)
+      const urlToRevoke = previewUrlRef.current;
+      if (urlToRevoke) {
         try {
-          revokePreviewUrl(previewUrl);
+          revokePreviewUrl(urlToRevoke);
+          previewUrlRef.current = null;
         } catch (e) {
           console.warn("Failed to revoke preview URL:", e);
         }
@@ -1567,9 +1885,14 @@ export default function RecordingRoom() {
     if (typeof video.setSinkId === "function") {
       video.setSinkId(deviceSettings.outputDeviceId).catch((err: any) => {
         console.warn("[DeviceSettings] setSinkId failed:", err?.message);
+        toast({
+          title: "Saída de áudio não aplicada",
+          description: "Verifique as permissões do dispositivo selecionado. O áudio voltará ao padrão.",
+          variant: "destructive",
+        });
       });
     }
-  }, [deviceSettings.outputDeviceId]);
+  }, [deviceSettings.outputDeviceId, toast]);
 
   useEffect(() => {
     try {
@@ -1856,27 +2179,24 @@ export default function RecordingRoom() {
     });
   }, []);
 
-  // ── Video native PiP: sync state when user closes via browser controls ─────
-  useEffect(() => {
-    const video = videoRef.current;
-    if (!video) return;
-    const onLeave = () => setVideoFloating(false);
-    video.addEventListener("leavepictureinpicture", onLeave);
-    return () => video.removeEventListener("leavepictureinpicture", onLeave);
-  }, []);
+  const videoFloatTimeRef = useRef<{ time: number; playing: boolean } | null>(null);
 
-  const toggleVideoFloat = useCallback(async () => {
+  const toggleVideoFloat = useCallback(() => {
     const video = videoRef.current;
     if (!video || !production?.videoUrl) return;
-    if (videoFloating) {
-      try { if (document.pictureInPictureElement) await document.exitPictureInPicture(); } catch {}
-      setVideoFloating(false);
-    } else {
-      if (document.pictureInPictureEnabled && "requestPictureInPicture" in video) {
-        try { await (video as any).requestPictureInPicture(); setVideoFloating(true); } catch {}
-      }
-    }
-  }, [videoFloating, production?.videoUrl]);
+    videoFloatTimeRef.current = { time: video.currentTime, playing: !video.paused };
+    setVideoFloating(v => !v);
+  }, [production?.videoUrl]);
+
+  useEffect(() => {
+    const saved = videoFloatTimeRef.current;
+    if (!saved) return;
+    videoFloatTimeRef.current = null;
+    const video = videoRef.current;
+    if (!video) return;
+    video.currentTime = saved.time;
+    if (saved.playing) video.play().catch(() => {});
+  }, [videoFloating]);
 
   const toggleScriptFloat = useCallback(async () => {
     if (scriptFloating) {
@@ -1973,6 +2293,65 @@ export default function RecordingRoom() {
     popup.addEventListener("beforeunload", () => setTimecodePipWindow(null));
     setTimecodePipWindow(popup);
   }, [timecodePipWindow, toast]);
+
+  const toggleUnifiedPip = useCallback(async () => {
+    if (unifiedPipWindow && !unifiedPipWindow.closed) {
+      unifiedPipWindow.close();
+      setUnifiedPipWindow(null);
+      return;
+    }
+    // Fecha PIPs individuais para evitar conflito de videoRef / janelas externas
+    if (videoFloating) {
+      const video = videoRef.current;
+      if (video) videoFloatTimeRef.current = { time: video.currentTime, playing: !video.paused };
+      setVideoFloating(false);
+    }
+    if (scriptFloating) {
+      if (scriptPipWindow && !scriptPipWindow.closed) scriptPipWindow.close();
+      setScriptFloating(false);
+      setScriptPipWindow(null);
+    }
+    if (timecodePipWindow && !timecodePipWindow.closed) {
+      timecodePipWindow.close();
+      setTimecodePipWindow(null);
+    }
+    const pw = 960, ph = 520;
+    const sw = window.screen.width, sh = window.screen.height;
+    const copyStyles = (win: Window) => {
+      document.querySelectorAll('link[rel="stylesheet"], style').forEach(el => {
+        try { win.document.head.appendChild(el.cloneNode(true)); } catch {}
+      });
+      win.document.documentElement.className = document.documentElement.className;
+      win.document.body.style.cssText = "margin:0;padding:0;width:100%;height:100%;overflow:hidden;background:#07090f;";
+      win.document.title = "Studio PiP — HubDub";
+    };
+    // Tenta documentPictureInPicture primeiro (Chrome 116+)
+    if ("documentPictureInPicture" in window) {
+      try {
+        // @ts-ignore
+        const pipWin: Window = await (window as any).documentPictureInPicture.requestWindow({ width: pw, height: ph });
+        copyStyles(pipWin);
+        pipWin.addEventListener("pagehide", () => setUnifiedPipWindow(null));
+        setUnifiedPipWindow(pipWin);
+        return;
+      } catch {}
+    }
+    // Fallback: window.open popup (janela real de OS, pode ir para outro monitor)
+    const left = Math.round((sw - pw) / 2);
+    const top  = Math.round((sh - ph) / 2);
+    const popup = window.open(
+      "about:blank",
+      "hubdub-studio-pip",
+      `width=${pw},height=${ph},top=${top},left=${left},popup=1,noopener=0`
+    );
+    if (!popup) {
+      toast({ title: "Popup bloqueado", description: "Permita popups neste site para usar o Studio PiP em outro monitor.", variant: "destructive" });
+      return;
+    }
+    copyStyles(popup);
+    popup.addEventListener("beforeunload", () => setUnifiedPipWindow(null));
+    setUnifiedPipWindow(popup);
+  }, [unifiedPipWindow, videoFloating, scriptFloating, scriptPipWindow, timecodePipWindow, toast]);
 
   useEffect(() => {
     const viewport = scriptViewportRef.current;
@@ -2101,8 +2480,10 @@ export default function RecordingRoom() {
   const emitVideoEvent = useCallback((event: string, data: any) => {
     if (isRemoteAction.current) return;
     const ws = wsRef.current;
-    if (ws && ws.readyState === 1) { // WebSocket.OPEN is 1
+    if (ws && ws.readyState === WebSocket.OPEN) {
       ws.send(JSON.stringify({ type: event, ...data }));
+    } else if (ws && ws.readyState === WebSocket.CONNECTING) {
+      // Reconectando — descarta silenciosamente; o badge de status já informa o usuário
     } else {
       console.warn(`[VideoSync] WS not open (state=${ws?.readyState ?? 'null'}), dropped event: ${event}`);
     }
@@ -2237,8 +2618,10 @@ export default function RecordingRoom() {
   }, [canTextControl, scriptLines, loopSelectionMode, customLoop, toast, scrollScriptToLine, emitVideoEvent]);
 
   const cleanupPreview = useCallback(() => {
-    if (previewUrl) {
-      revokePreviewUrl(previewUrl);
+    const url = previewUrlRef.current ?? previewUrl;
+    if (url) {
+      revokePreviewUrl(url);
+      previewUrlRef.current = null;
       setPreviewUrl(null);
     }
     if (previewAudioRef.current) {
@@ -2365,6 +2748,7 @@ export default function RecordingRoom() {
     } else {
       setApprovalStatus('pending');
     }
+    previewUrlRef.current = blobUrl;
     setPreviewUrl(blobUrl);
 
     // ➌ Upload in background — popup is already visible
@@ -2637,7 +3021,7 @@ export default function RecordingRoom() {
       .map(t => ({
         id: t.id,
         audioUrl: t.audioUrl ?? "",
-        startTimeSeconds: t.startTimeSeconds ?? 0,
+        startTimeSeconds: optimisticStartTimes[t.id] ?? t.startTimeSeconds ?? 0,
         durationSeconds: optimisticTrimDurations[t.id] ?? t.durationSeconds ?? 0,
         voiceActorName: t.voiceActorName ?? "",
         voiceActorId: t.voiceActorId ?? "",
@@ -2649,7 +3033,7 @@ export default function RecordingRoom() {
       .filter(t => !dbIds.has(t.id))
       .map(t => ({ ...t, durationSeconds: optimisticTrimDurations[t.id] ?? t.durationSeconds }));
     return [...fromDB, ...extraFromOptimistic];
-  }, [takesList, textControllerUserIds, showAllTracks, optimisticApproved, optimisticTrimDurations]);
+  }, [takesList, textControllerUserIds, showAllTracks, optimisticApproved, optimisticTrimDurations, optimisticStartTimes]);
 
   // Perfis de dubladores conhecidos: acumulados via WS + aprovados em DB
   const voiceActorProfiles = useMemo(() => {
@@ -2776,6 +3160,113 @@ export default function RecordingRoom() {
       toast({ title: "Take dividido", description: `Cortado em ${splitAtSeconds.toFixed(1)}s` });
     } catch (err: any) {
       toast({ title: "Erro ao dividir take", description: err.message, variant: "destructive" });
+    }
+  }, [refetchTakes, toast]);
+
+  const handleNudgeClip = useCallback(async (takeId: string, frames: number) => {
+    if (!takeId || takeId.startsWith("pending-")) return;
+    const allTakes = (takesList as any[]);
+    const take = allTakes.find((t: any) => t.id === takeId);
+    if (!take) return;
+    const FRAME_S = 1 / 24;
+    const currentStart = optimisticStartTimes[takeId] ?? take.startTimeSeconds ?? 0;
+    const newStart = Math.max(0, currentStart + frames * FRAME_S);
+    // Optimistic: aplica imediatamente para que o clipe se mova antes da API retornar
+    setOptimisticStartTimes(prev => ({ ...prev, [takeId]: newStart }));
+    try {
+      await authFetch(`/api/takes/${takeId}/reposition`, {
+        method: "POST",
+        body: JSON.stringify({ startTimeSeconds: newStart }),
+      });
+      await refetchTakes();
+      setOptimisticStartTimes(prev => { const n = { ...prev }; delete n[takeId]; return n; });
+    } catch (err: any) {
+      // Reverte optimistic em caso de erro
+      setOptimisticStartTimes(prev => { const n = { ...prev }; delete n[takeId]; return n; });
+      toast({ title: "Erro ao reposicionar take", description: err.message, variant: "destructive" });
+    }
+  }, [takesList, optimisticStartTimes, refetchTakes, toast]);
+
+  const handleReRecordLine = useCallback(async (lineIndex: number) => {
+    const line = scriptLines[lineIndex];
+    if (!line) return;
+    const lineStart = line.start;
+    const lineEnd = line.end ?? (scriptLines[lineIndex + 1]?.start ?? lineStart + 10);
+
+    const overlapping = (takesList as any[]).filter(t =>
+      t.status === "approved" &&
+      t.startTimeSeconds < lineEnd &&
+      (t.startTimeSeconds + (t.durationSeconds ?? 0)) > lineStart
+    );
+
+    try {
+      for (const take of overlapping) {
+        const takeStart: number = take.startTimeSeconds;
+        const takeEnd: number = takeStart + (take.durationSeconds ?? 0);
+        let idToDelete: string = take.id;
+
+        if (takeStart < lineStart) {
+          const r1 = await authFetch(`/api/takes/${take.id}/split`, {
+            method: "POST",
+            body: JSON.stringify({ splitAtSeconds: lineStart - takeStart }),
+          });
+          const tailId: string = r1.part2.id;
+          if (takeEnd > lineEnd) {
+            const r2 = await authFetch(`/api/takes/${tailId}/split`, {
+              method: "POST",
+              body: JSON.stringify({ splitAtSeconds: lineEnd - lineStart }),
+            });
+            idToDelete = r2.part1.id;
+          } else {
+            idToDelete = tailId;
+          }
+        } else if (takeEnd > lineEnd) {
+          const r = await authFetch(`/api/takes/${take.id}/split`, {
+            method: "POST",
+            body: JSON.stringify({ splitAtSeconds: lineEnd - takeStart }),
+          });
+          idToDelete = r.part1.id;
+        }
+
+        await authFetch(`/api/takes/${idToDelete}`, { method: "DELETE" });
+        setOptimisticApproved(prev => prev.filter(t => t.id !== idToDelete));
+      }
+
+      await refetchTakes();
+      seekToTime(Math.max(0, lineStart - 2));
+      setCustomLoop({ start: lineStart, end: lineEnd });
+      setIsLooping(true);
+      toast({
+        title: "Pronto para regravar",
+        description: overlapping.length > 0 ? "Gravação anterior removida. Use o loop e grave novamente." : "Use o loop e grave normalmente.",
+      });
+    } catch (err: any) {
+      refetchTakes();
+      toast({ title: "Erro ao preparar regravação", description: err.message, variant: "destructive" });
+    } finally {
+      setReRecordConfirmIndex(null);
+    }
+  }, [scriptLines, takesList, refetchTakes, seekToTime, toast]);
+
+  const handleSplitClipByLines = useCallback(async (takeId: string, boundarySeconds: number[]) => {
+    if (boundarySeconds.length === 0) return;
+    let currentId = takeId;
+    let prevBoundary = 0;
+    try {
+      for (const boundary of boundarySeconds) {
+        const splitAt = boundary - prevBoundary;
+        const result = await authFetch(`/api/takes/${currentId}/split`, {
+          method: "POST",
+          body: JSON.stringify({ splitAtSeconds: splitAt }),
+        });
+        currentId = result.part2.id;
+        prevBoundary = boundary;
+      }
+      refetchTakes();
+      toast({ title: "Take dividido por falas", description: `${boundarySeconds.length + 1} segmento(s) criado(s)` });
+    } catch (err: any) {
+      refetchTakes();
+      toast({ title: "Erro ao dividir por falas", description: err.message, variant: "destructive" });
     }
   }, [refetchTakes, toast]);
 
@@ -3628,6 +4119,16 @@ export default function RecordingRoom() {
                     <Settings className="w-3.5 h-3.5 shrink-0" style={{ color: "hsl(var(--muted-foreground))" }} />
                     Atalhos
                   </button>
+                  <button
+                    onClick={() => { toggleUnifiedPip(); setSettingsDrawerOpen(false); }}
+                    className="flex items-center gap-2.5 px-3 py-2 text-sm transition-colors hover:bg-muted/60 text-left"
+                    style={{ color: (unifiedPipWindow && !unifiedPipWindow.closed) ? "hsl(var(--primary))" : "hsl(var(--foreground) / 0.80)" }}
+                    data-testid="button-unified-pip"
+                  >
+                    <LayoutTemplate className="w-3.5 h-3.5 shrink-0" style={{ color: (unifiedPipWindow && !unifiedPipWindow.closed) ? "hsl(var(--primary))" : "hsl(var(--muted-foreground))" }} />
+                    Studio PiP
+                    {(unifiedPipWindow && !unifiedPipWindow.closed) && <span className="ml-auto text-[10px] font-semibold" style={{ color: "hsl(var(--primary))" }}>ON</span>}
+                  </button>
                   <div style={{ height: 1, background: "hsl(var(--border))", margin: "2px 0" }} />
                   <button
                     onClick={() => { setTimecodeVisible(v => !v); }}
@@ -3677,54 +4178,50 @@ export default function RecordingRoom() {
         <div className="flex flex-col" style={isMobile
           ? { width: '100%', height: `${mobileVideoH}vh`, flexShrink: 0 }
           : { width: `${(isLandscapeMobile ? Math.min(0.60, Math.max(0.30, splitRatio > 0.60 ? 0.40 : splitRatio)) : splitRatio) * 100}%`, minWidth: isLandscapeMobile ? '30%' : '25%', maxWidth: isLandscapeMobile ? '60%' : '80%', minHeight: 0 }}>
-          {/* Video container — always rendered here; when floating a placeholder is shown */}
+          {/* Video container — shows video inline or placeholder when floating */}
           <div
             className="flex-1 relative overflow-hidden"
             style={{ minHeight: (isMobile || isLandscapeMobile) ? 0 : 240, background: "rgb(10,10,14)", border: "1px solid rgba(0,0,0,0.15)", margin: "4px 4px 0 4px", borderRadius: "12px" }}
             onDoubleClick={() => toggleVideoFloat()}
           >
-            {/* Video always in DOM so videoRef works with native PiP */}
-            {production?.videoUrl ? (
-              <video
-                ref={videoRef}
-                src={production.videoUrl}
-                className="w-full h-full object-contain"
-                onPlay={() => setIsPlaying(true)}
-                onPause={() => setIsPlaying(false)}
-                onLoadedMetadata={(e) => {
-                  const v = e.currentTarget;
-                  v.volume = deviceSettings.monitorVolume;
-                  // @ts-ignore
-                  if (deviceSettings.outputDeviceId && typeof v.setSinkId === "function") {
-                    v.setSinkId(deviceSettings.outputDeviceId).catch(() => {});
-                  }
-                }}
-                muted={isMuted}
-                playsInline
-                controls={false}
-                controlsList="nodownload noplaybackrate noremoteplayback nofullscreen"
-              />
-            ) : (
-              <div className="w-full h-full flex flex-col items-center justify-center gap-3" style={{ color: "rgba(255,255,255,0.50)" }}>
-                <div className="w-16 h-16 rounded-2xl flex items-center justify-center" style={{ background: "rgba(255,255,255,0.10)" }}>
-                  <Play className="w-7 h-7" />
-                </div>
-                <p className="text-xs">Nenhum video anexado a esta producao</p>
-              </div>
-            )}
-            {/* Timecode HH:MM:SS — always rendered; videoRef still works in native PiP */}
-            <DraggableTimecode videoRef={videoRef} visible={timecodeVisible && videoDuration > 0} />
-
-            {/* PiP active overlay */}
-            {videoFloating && (
-              <div className="absolute inset-0 flex flex-col items-center justify-center gap-2" style={{ background: "rgba(10,10,14,0.75)", color: "rgba(255,255,255,0.4)", zIndex: 2 }}>
+            {(videoFloating || (unifiedPipWindow && !unifiedPipWindow.closed)) ? (
+              /* Placeholder shown while video is in floating panel or UnifiedPipPanel */
+              <div className="absolute inset-0 flex flex-col items-center justify-center gap-2" style={{ color: "rgba(255,255,255,0.35)" }}>
                 <Maximize2 className="w-6 h-6" />
-                <p className="text-xs">Vídeo em PiP</p>
-                <p className="text-[10px]" style={{ color: "rgba(255,255,255,0.25)" }}>Duplo clique para recolher</p>
+                <p className="text-xs">{(unifiedPipWindow && !unifiedPipWindow.closed) ? "Vídeo no Studio PiP" : "Vídeo flutuante"}</p>
+                <p className="text-[10px]" style={{ color: "rgba(255,255,255,0.20)" }}>Duplo clique para recolher</p>
               </div>
-            )}
-            {!videoFloating && (
+            ) : (
               <>
+                {production?.videoUrl ? (
+                  <video
+                    ref={videoRef}
+                    src={production.videoUrl}
+                    className="w-full h-full object-contain"
+                    onPlay={() => setIsPlaying(true)}
+                    onPause={() => setIsPlaying(false)}
+                    onLoadedMetadata={(e) => {
+                      const v = e.currentTarget;
+                      v.volume = deviceSettings.monitorVolume;
+                      // @ts-ignore
+                      if (deviceSettings.outputDeviceId && typeof v.setSinkId === "function") {
+                        v.setSinkId(deviceSettings.outputDeviceId).catch(() => {});
+                      }
+                    }}
+                    muted={isMuted}
+                    playsInline
+                    controls={false}
+                    controlsList="nodownload noplaybackrate noremoteplayback nofullscreen"
+                  />
+                ) : (
+                  <div className="w-full h-full flex flex-col items-center justify-center gap-3" style={{ color: "rgba(255,255,255,0.50)" }}>
+                    <div className="w-16 h-16 rounded-2xl flex items-center justify-center" style={{ background: "rgba(255,255,255,0.10)" }}>
+                      <Play className="w-7 h-7" />
+                    </div>
+                    <p className="text-xs">Nenhum video anexado a esta producao</p>
+                  </div>
+                )}
+                <DraggableTimecode videoRef={videoRef} visible={timecodeVisible && videoDuration > 0} />
                 <button
                   onClick={(e) => { e.stopPropagation(); setIsMuted((m) => !m); }}
                   className="absolute top-3 right-3 p-2 rounded-xl bg-black/40 text-zinc-400 hover:text-white transition-all hover:bg-black/60"
@@ -3732,7 +4229,6 @@ export default function RecordingRoom() {
                 >
                   {isMuted ? <VolumeX className="w-4 h-4" /> : <Volume2 className="w-4 h-4" />}
                 </button>
-
                 {/* Landscape floating recording controls */}
                 {isLandscapeMobile && (
                   <div style={{ position: 'absolute', bottom: 8, right: 8, display: 'flex', alignItems: 'center', gap: 5, background: 'rgba(6,8,16,0.82)', backdropFilter: 'blur(14px)', WebkitBackdropFilter: 'blur(14px)', padding: '5px 7px', borderRadius: 12, zIndex: 10, border: '1px solid rgba(255,255,255,0.07)', boxShadow: '0 4px 24px rgba(0,0,0,0.5)' }}>
@@ -3789,6 +4285,52 @@ export default function RecordingRoom() {
               </>
             )}
           </div>
+
+          {/* Custom floating video panel — rendered when videoFloating */}
+          {videoFloating && production?.videoUrl && (
+            <FloatingVideoPanel
+              onClose={() => toggleVideoFloat()}
+              isMuted={isMuted}
+              onToggleMute={() => setIsMuted(m => !m)}
+            >
+              <video
+                ref={videoRef}
+                src={production.videoUrl}
+                className="w-full h-full object-contain"
+                onPlay={() => setIsPlaying(true)}
+                onPause={() => setIsPlaying(false)}
+                onLoadedMetadata={(e) => {
+                  const v = e.currentTarget;
+                  v.volume = deviceSettings.monitorVolume;
+                  // @ts-ignore
+                  if (deviceSettings.outputDeviceId && typeof v.setSinkId === "function") {
+                    v.setSinkId(deviceSettings.outputDeviceId).catch(() => {});
+                  }
+                }}
+                muted={isMuted}
+                playsInline
+                controls={false}
+                controlsList="nodownload noplaybackrate noremoteplayback nofullscreen"
+              />
+            </FloatingVideoPanel>
+          )}
+
+          {/* ── Studio PiP — popup real de OS via createPortal ── */}
+          {unifiedPipWindow && !unifiedPipWindow.closed && createPortal(
+            <UnifiedPipPanel
+              videoRef={videoRef}
+              videoSrc={production?.videoUrl}
+              isMuted={isMuted}
+              onToggleMute={() => setIsMuted(m => !m)}
+              scriptLines={scriptLines}
+              currentLines={currentLines}
+              lineEdits={lineEdits}
+              scriptFontScale={scriptFontScale}
+              autoFollow={scriptAutoFollow}
+              onClose={() => { unifiedPipWindow.close(); setUnifiedPipWindow(null); }}
+            />,
+            unifiedPipWindow.document.body
+          )}
 
           {videoDuration > 0 && (
             <div className="px-3 sm:px-5 py-2" style={{ background: "hsl(var(--muted) / 0.4)", borderTop: "1px solid hsl(var(--border))" }}>
@@ -4180,6 +4722,8 @@ export default function RecordingRoom() {
                           e.stopPropagation();
                           setEditingLineIndex(i);
                           setEditingLineText(lineEdits[i] ?? line.text);
+                          setEditingLineCharacter(line.character);
+                          setEditingLineTimecode(formatTimecode(line.start));
                         }}
                         className="ml-1 p-1 rounded transition-colors"
                         style={{ color: "hsl(var(--muted-foreground) / 0.7)" }}
@@ -4189,22 +4733,84 @@ export default function RecordingRoom() {
                         <Edit3 className="w-3.5 h-3.5" />
                       </button>
                     )}
+                    {canTextControl && reRecordConfirmIndex === i ? (
+                      <span className="ml-1 flex items-center gap-1" onClick={(e) => e.stopPropagation()}>
+                        <span className="text-[10px] font-semibold" style={{ color: "hsl(38 92% 60%)" }}>Confirmar?</span>
+                        <button
+                          onClick={(e) => { e.stopPropagation(); handleReRecordLine(i); }}
+                          className="p-1 rounded transition-colors"
+                          style={{ color: "hsl(142 71% 55%)" }}
+                          title="Confirmar regravação"
+                        ><Check className="w-3 h-3" /></button>
+                        <button
+                          onClick={(e) => { e.stopPropagation(); setReRecordConfirmIndex(null); }}
+                          className="p-1 rounded transition-colors"
+                          style={{ color: "hsl(var(--muted-foreground) / 0.7)" }}
+                          title="Cancelar"
+                        ><X className="w-3 h-3" /></button>
+                      </span>
+                    ) : canTextControl ? (
+                      <button
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          setReRecordConfirmIndex(i);
+                          setTimeout(() => setReRecordConfirmIndex(prev => prev === i ? null : prev), 4000);
+                        }}
+                        className="ml-1 p-1 rounded transition-colors"
+                        style={{ color: isDone ? "hsl(38 92% 60%)" : "hsl(var(--muted-foreground) / 0.4)" }}
+                        title="Regravar esta fala (remove a gravação existente e entra em modo loop)"
+                        data-testid={`button-rerecord-line-${i}`}
+                      >
+                        <RefreshCw className="w-3.5 h-3.5" />
+                      </button>
+                    ) : null}
                   </div>
                   {editingLineIndex === i ? (
-                    <div onClick={(e) => e.stopPropagation()}>
-                      <textarea
-                        value={editingLineText}
-                        onChange={(e) => setEditingLineText(e.target.value)}
-                        className="w-full rounded-lg p-3 text-[16px] lg:text-[18px] leading-relaxed border focus:border-primary outline-none"
-                        style={{ background: "hsl(var(--input))", borderColor: "hsl(var(--border))", color: "hsl(var(--foreground))" }}
-                        rows={3}
-                        data-testid={`textarea-edit-line-${i}`}
-                      />
-                      <div className="flex justify-end gap-2 mt-2">
+                    <div onClick={(e) => e.stopPropagation()} className="flex flex-col gap-2">
+                      <div className="flex gap-2">
+                        <div className="flex flex-col gap-1 flex-1">
+                          <label className="text-[10px] font-semibold uppercase tracking-wider" style={{ color: "hsl(var(--muted-foreground))" }}>Personagem</label>
+                          <input
+                            type="text"
+                            value={editingLineCharacter}
+                            onChange={(e) => setEditingLineCharacter(e.target.value)}
+                            className="w-full rounded-lg px-3 py-2 text-[13px] border focus:border-primary outline-none"
+                            style={{ background: "hsl(var(--input))", borderColor: "hsl(var(--border))", color: "hsl(var(--foreground))" }}
+                            placeholder="Nome do personagem"
+                            data-testid={`input-edit-character-${i}`}
+                          />
+                        </div>
+                        <div className="flex flex-col gap-1" style={{ minWidth: 120 }}>
+                          <label className="text-[10px] font-semibold uppercase tracking-wider" style={{ color: "hsl(var(--muted-foreground))" }}>Minutagem</label>
+                          <input
+                            type="text"
+                            value={editingLineTimecode}
+                            onChange={(e) => setEditingLineTimecode(e.target.value)}
+                            className="w-full rounded-lg px-3 py-2 text-[13px] font-mono border focus:border-primary outline-none"
+                            style={{ background: "hsl(var(--input))", borderColor: "hsl(var(--border))", color: "hsl(var(--foreground))" }}
+                            placeholder="00:00:00"
+                            data-testid={`input-edit-timecode-${i}`}
+                          />
+                        </div>
+                      </div>
+                      <div className="flex flex-col gap-1">
+                        <label className="text-[10px] font-semibold uppercase tracking-wider" style={{ color: "hsl(var(--muted-foreground))" }}>Texto da fala</label>
+                        <textarea
+                          value={editingLineText}
+                          onChange={(e) => setEditingLineText(e.target.value)}
+                          className="w-full rounded-lg p-3 text-[16px] lg:text-[18px] leading-relaxed border focus:border-primary outline-none"
+                          style={{ background: "hsl(var(--input))", borderColor: "hsl(var(--border))", color: "hsl(var(--foreground))" }}
+                          rows={3}
+                          data-testid={`textarea-edit-line-${i}`}
+                        />
+                      </div>
+                      <div className="flex justify-end gap-2">
                         <button
                           onClick={() => {
                             setEditingLineIndex(null);
                             setEditingLineText("");
+                            setEditingLineCharacter("");
+                            setEditingLineTimecode("");
                           }}
                           className="vhub-btn-xs vhub-btn-secondary"
                           data-testid={`button-cancel-edit-line-${i}`}
@@ -4215,15 +4821,19 @@ export default function RecordingRoom() {
                           onClick={() => {
                             if (!canTextControl) return;
                             const nextText = String(editingLineText || "");
-                            setLineEdits((prev) => ({ ...prev, [i]: nextText }));
                             emitTextControlEvent("text-control:update-line", { lineIndex: i, text: nextText });
-                            setEditingLineIndex(null);
-                            setEditingLineText("");
+                            updateScriptLineMutation.mutate({
+                              lineIndex: i,
+                              text: nextText,
+                              character: editingLineCharacter,
+                              timecode: editingLineTimecode,
+                            });
                           }}
                           className="vhub-btn-xs vhub-btn-primary"
+                          disabled={updateScriptLineMutation.isPending}
                           data-testid={`button-save-edit-line-${i}`}
                         >
-                          Salvar
+                          {updateScriptLineMutation.isPending ? "Salvando..." : "Salvar"}
                         </button>
                       </div>
                     </div>
@@ -4279,10 +4889,99 @@ export default function RecordingRoom() {
                     <div style={{ display: "flex", alignItems: "center", gap: 12, marginBottom: 8 }}>
                       <span style={{ fontSize: 14, fontFamily: "monospace", color: "hsl(var(--muted-foreground))" }}>{formatTimecode(line.start)}</span>
                       <span style={{ fontWeight: 800, fontSize: Math.round(24 * scriptFontScale), color: isActive ? "hsl(var(--primary))" : "hsl(var(--muted-foreground) / 0.45)", textTransform: "uppercase", letterSpacing: "0.5px", transition: "color 500ms" }}>{line.character}</span>
+                      {canTextControl && (
+                        <button
+                          onClick={(e) => { e.stopPropagation(); setEditingLineIndex(i); setEditingLineText(lineEdits[i] ?? line.text); setEditingLineCharacter(line.character); setEditingLineTimecode(formatTimecode(line.start)); }}
+                          style={{ marginLeft: 4, padding: 4, borderRadius: 4, background: "transparent", border: "none", cursor: "pointer", color: "hsl(var(--muted-foreground) / 0.7)", display: "flex", alignItems: "center" }}
+                          title="Editar fala"
+                        >
+                          <Edit3 style={{ width: 14, height: 14 }} />
+                        </button>
+                      )}
+                      {canTextControl && reRecordConfirmIndex === i ? (
+                        <span style={{ marginLeft: 4, display: "flex", alignItems: "center", gap: 4 }} onClick={(e) => e.stopPropagation()}>
+                          <span style={{ fontSize: 10, fontWeight: 600, color: "hsl(38 92% 60%)" }}>Confirmar?</span>
+                          <button onClick={(e) => { e.stopPropagation(); handleReRecordLine(i); }} style={{ padding: 4, borderRadius: 4, background: "transparent", border: "none", cursor: "pointer", color: "hsl(142 71% 55%)", display: "flex", alignItems: "center" }} title="Confirmar regravação">
+                            <Check style={{ width: 12, height: 12 }} />
+                          </button>
+                          <button onClick={(e) => { e.stopPropagation(); setReRecordConfirmIndex(null); }} style={{ padding: 4, borderRadius: 4, background: "transparent", border: "none", cursor: "pointer", color: "hsl(var(--muted-foreground) / 0.7)", display: "flex", alignItems: "center" }} title="Cancelar">
+                            <X style={{ width: 12, height: 12 }} />
+                          </button>
+                        </span>
+                      ) : canTextControl ? (
+                        <button
+                          onClick={(e) => { e.stopPropagation(); setReRecordConfirmIndex(i); setTimeout(() => setReRecordConfirmIndex(prev => prev === i ? null : prev), 4000); }}
+                          style={{ marginLeft: 4, padding: 4, borderRadius: 4, background: "transparent", border: "none", cursor: "pointer", color: savedTakes.has(i) ? "hsl(38 92% 60%)" : "hsl(var(--muted-foreground) / 0.4)", display: "flex", alignItems: "center" }}
+                          title="Regravar esta fala (remove a gravação existente e entra em modo loop)"
+                        >
+                          <RefreshCw style={{ width: 14, height: 14 }} />
+                        </button>
+                      ) : null}
                     </div>
-                    <p style={{ fontSize: Math.round(22 * scriptFontScale), lineHeight: 1.7, color: isActive ? "hsl(var(--foreground))" : "hsl(var(--muted-foreground))", fontWeight: isActive ? 500 : 400, opacity: isActive ? 1 : 0.72, margin: 0, transition: "color 500ms, opacity 500ms" }}>
-                      {lineEdits[i] ?? line.text}
-                    </p>
+                    {editingLineIndex === i ? (
+                      <div onClick={(e) => e.stopPropagation()} style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+                        <div style={{ display: "flex", gap: 8 }}>
+                          <div style={{ display: "flex", flexDirection: "column", gap: 4, flex: 1 }}>
+                            <label style={{ fontSize: 10, fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.05em", color: "hsl(var(--muted-foreground))" }}>Personagem</label>
+                            <input
+                              type="text"
+                              value={editingLineCharacter}
+                              onChange={(e) => setEditingLineCharacter(e.target.value)}
+                              style={{ width: "100%", borderRadius: 8, padding: "6px 10px", fontSize: 13, background: "hsl(var(--input))", border: "1px solid hsl(var(--border))", color: "hsl(var(--foreground))", outline: "none", boxSizing: "border-box" }}
+                              placeholder="Nome do personagem"
+                            />
+                          </div>
+                          <div style={{ display: "flex", flexDirection: "column", gap: 4, minWidth: 110 }}>
+                            <label style={{ fontSize: 10, fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.05em", color: "hsl(var(--muted-foreground))" }}>Minutagem</label>
+                            <input
+                              type="text"
+                              value={editingLineTimecode}
+                              onChange={(e) => setEditingLineTimecode(e.target.value)}
+                              style={{ width: "100%", borderRadius: 8, padding: "6px 10px", fontSize: 13, fontFamily: "monospace", background: "hsl(var(--input))", border: "1px solid hsl(var(--border))", color: "hsl(var(--foreground))", outline: "none", boxSizing: "border-box" }}
+                              placeholder="00:00:00"
+                            />
+                          </div>
+                        </div>
+                        <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
+                          <label style={{ fontSize: 10, fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.05em", color: "hsl(var(--muted-foreground))" }}>Texto da fala</label>
+                          <textarea
+                            value={editingLineText}
+                            onChange={(e) => setEditingLineText(e.target.value)}
+                            rows={3}
+                            style={{ width: "100%", borderRadius: 8, padding: 12, fontSize: Math.round(18 * scriptFontScale), lineHeight: 1.7, background: "hsl(var(--input))", border: "1px solid hsl(var(--border))", color: "hsl(var(--foreground))", outline: "none", boxSizing: "border-box", resize: "vertical" }}
+                          />
+                        </div>
+                        <div style={{ display: "flex", justifyContent: "flex-end", gap: 8 }}>
+                          <button
+                            onClick={() => { setEditingLineIndex(null); setEditingLineText(""); setEditingLineCharacter(""); setEditingLineTimecode(""); }}
+                            className="vhub-btn-xs vhub-btn-secondary"
+                          >
+                            Cancelar
+                          </button>
+                          <button
+                            onClick={() => {
+                              if (!canTextControl) return;
+                              const nextText = String(editingLineText || "");
+                              emitTextControlEvent("text-control:update-line", { lineIndex: i, text: nextText });
+                              updateScriptLineMutation.mutate({
+                                lineIndex: i,
+                                text: nextText,
+                                character: editingLineCharacter,
+                                timecode: editingLineTimecode,
+                              });
+                            }}
+                            className="vhub-btn-xs vhub-btn-primary"
+                            disabled={updateScriptLineMutation.isPending}
+                          >
+                            {updateScriptLineMutation.isPending ? "Salvando..." : "Salvar"}
+                          </button>
+                        </div>
+                      </div>
+                    ) : (
+                      <p style={{ fontSize: Math.round(22 * scriptFontScale), lineHeight: 1.7, color: isActive ? "hsl(var(--foreground))" : "hsl(var(--muted-foreground))", fontWeight: isActive ? 500 : 400, opacity: isActive ? 1 : 0.72, margin: 0, transition: "color 500ms, opacity 500ms" }}>
+                        {lineEdits[i] ?? line.text}
+                      </p>
+                    )}
                   </div>
                 );
             })}
@@ -4365,6 +5064,17 @@ export default function RecordingRoom() {
                           <Edit3 className="w-3.5 h-3.5" />
                         </button>
                       )}
+                      {canTextControl && reRecordConfirmIndex === i ? (
+                        <span className="ml-1 flex items-center gap-1" onClick={(e) => e.stopPropagation()}>
+                          <span className="text-[10px] font-semibold" style={{ color: "hsl(38 92% 60%)" }}>Confirmar?</span>
+                          <button onClick={(e) => { e.stopPropagation(); handleReRecordLine(i); }} className="p-1 rounded transition-colors" style={{ color: "hsl(142 71% 55%)" }} title="Confirmar regravação"><Check className="w-3 h-3" /></button>
+                          <button onClick={(e) => { e.stopPropagation(); setReRecordConfirmIndex(null); }} className="p-1 rounded transition-colors" style={{ color: "hsl(var(--muted-foreground) / 0.7)" }} title="Cancelar"><X className="w-3 h-3" /></button>
+                        </span>
+                      ) : canTextControl ? (
+                        <button onClick={(e) => { e.stopPropagation(); setReRecordConfirmIndex(i); setTimeout(() => setReRecordConfirmIndex(prev => prev === i ? null : prev), 4000); }} className="ml-1 p-1 rounded transition-colors" style={{ color: isDone ? "hsl(38 92% 60%)" : "hsl(var(--muted-foreground) / 0.4)" }} title="Regravar esta fala (remove a gravação existente e entra em modo loop)" data-testid={`button-rerecord-line-${i}`}>
+                          <RefreshCw className="w-3.5 h-3.5" />
+                        </button>
+                      ) : null}
                       {isDone && lineTakes.length > 0 && (
                         <span className="ml-auto flex items-center gap-1 text-[10px] font-medium px-1.5 py-0.5 rounded-full" style={{ background: "hsl(142 72% 95%)", color: "hsl(142 60% 36%)", border: "1px solid hsl(142 72% 80%)" }}>
                           <CheckCircle2 className="w-3 h-3" />{lineTakes.length}
@@ -4504,8 +5214,10 @@ export default function RecordingRoom() {
           onLoopChange={(range) => { setCustomLoop(range); setIsLooping(!!range); }}
           onTakeTrim={handleTakeTrim}
           onTakeSplit={handleTakeSplit}
+          onNudgeClip={handleNudgeClip}
           onTakeDelete={handleTakeDelete}
           onTakeSilenceRemove={handleTakeSilenceRemove}
+          onSplitByLines={handleSplitClipByLines}
           videoRef={videoRef}
           onMuteVideo={handleMuteVideo}
           onUnmuteVideo={handleUnmuteVideo}

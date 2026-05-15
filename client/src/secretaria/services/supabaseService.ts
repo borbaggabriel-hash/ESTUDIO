@@ -74,10 +74,12 @@ export const firebaseService = {
 
   // ── Perfil do aluno ───────────────────────────────────────────────────────
 
-  async getStudentProfile(_userId: string) {
+  async getStudentProfile(userId: string) {
     try {
-      const { profile } = await api('/api/hub/me');
-      return profile;
+      const data = await api('/api/auth/user');
+      const user = data.user ?? data;
+      if (user?.id === userId) return user;
+      return user ?? null;
     } catch { return null; }
   },
 
@@ -185,6 +187,31 @@ export const firebaseService = {
   },
 
   async getAllActivity() { return []; },
+
+  // ── Admin: estúdios ───────────────────────────────────────────────────────────
+
+  async getAdminStudios() {
+    try { return await api('/api/hub/admin/studios'); } catch { return []; }
+  },
+
+  async updateAdminStudio(id: string, data: any) {
+    return api(`/api/hub/admin/studios/${id}`, { method: 'PATCH', body: JSON.stringify(data) });
+  },
+
+  async getAdminStudioMembers(id: string) {
+    try { return await api(`/api/hub/admin/studios/${id}/members`); } catch { return []; }
+  },
+
+  async updateAdminStudioMemberRole(studioId: string, membershipId: string, roles: string[]) {
+    return api(`/api/hub/admin/studios/${studioId}/members/${membershipId}/role`, {
+      method: 'PATCH',
+      body: JSON.stringify({ roles }),
+    });
+  },
+
+  async removeAdminStudioMember(studioId: string, membershipId: string) {
+    return api(`/api/hub/admin/studios/${studioId}/members/${membershipId}`, { method: 'DELETE' });
+  },
   async deleteStudent(id: string) {
     return api(`/api/hub/admin/students/${id}`, { method: 'DELETE' });
   },
