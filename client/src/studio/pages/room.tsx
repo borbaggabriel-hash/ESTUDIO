@@ -344,6 +344,7 @@ function UnifiedPipPanel({
   const mirrorVideoRef = useRef<HTMLVideoElement>(null);
   const scriptRef = useRef<HTMLDivElement>(null);
   const tcRef = useRef<HTMLSpanElement>(null);
+  const playPendingRef = useRef(false);
 
   // Sincroniza mirror video com o video principal via RAF
   useEffect(() => {
@@ -352,13 +353,21 @@ function UnifiedPipPanel({
       const main = videoRef.current;
       const mirror = mirrorVideoRef.current;
       if (main && mirror) {
-        if (!main.paused && mirror.paused) mirror.play().catch(() => {});
+        // Play sync — guard against overlapping play() promises
+        if (!main.paused && mirror.paused && !playPendingRef.current) {
+          playPendingRef.current = true;
+          mirror.play()
+            .catch(() => {})
+            .finally(() => { playPendingRef.current = false; });
+        }
         if (main.paused && !mirror.paused) mirror.pause();
+        // Seek sync — allow 0.5s drift before correcting
         if (Math.abs(mirror.currentTime - main.currentTime) > 0.5) {
           mirror.currentTime = main.currentTime;
         }
       }
-      const t = mirrorVideoRef.current?.currentTime ?? videoRef.current?.currentTime ?? 0;
+      // Timecode: prefer main video time (always in DOM, never null after Fix 1)
+      const t = main?.currentTime ?? mirror?.currentTime ?? 0;
       if (tcRef.current) tcRef.current.textContent = formatTimecode(t);
       raf = requestAnimationFrame(sync);
     };
@@ -405,7 +414,26 @@ function UnifiedPipPanel({
         <div style={{ flex: "0 0 50%", display: "flex", flexDirection: "column", background: "#000", overflow: "hidden" }}>
           <div style={{ flex: 1, minHeight: 0, position: "relative" }}>
             {videoSrc ? (
-              <video ref={mirrorVideoRef} src={videoSrc} style={{ width: "100%", height: "100%", objectFit: "contain", display: "block" }} muted={isMuted} playsInline />
+              <video
+                ref={mirrorVideoRef}
+                src={videoSrc}
+                style={{ width: "100%", height: "100%", objectFit: "contain", display: "block" }}
+                muted
+                autoPlay
+                playsInline
+                onLoadedMetadata={() => {
+                  const main = videoRef.current;
+                  const mirror = mirrorVideoRef.current;
+                  if (!main || !mirror) return;
+                  mirror.currentTime = main.currentTime;
+                  if (!main.paused && !playPendingRef.current) {
+                    playPendingRef.current = true;
+                    mirror.play()
+                      .catch(() => {})
+                      .finally(() => { playPendingRef.current = false; });
+                  }
+                }}
+              />
             ) : (
               <div style={{ width: "100%", height: "100%", display: "flex", alignItems: "center", justifyContent: "center", color: "rgba(255,255,255,0.3)", fontSize: 12 }}>Sem vídeo</div>
             )}
@@ -4184,11 +4212,11 @@ export default function RecordingRoom() {
             style={{ minHeight: (isMobile || isLandscapeMobile) ? 0 : 240, background: "rgb(10,10,14)", border: "1px solid rgba(0,0,0,0.15)", margin: "4px 4px 0 4px", borderRadius: "12px" }}
             onDoubleClick={() => toggleVideoFloat()}
           >
-            {(videoFloating || (unifiedPipWindow && !unifiedPipWindow.closed)) ? (
-              /* Placeholder shown while video is in floating panel or UnifiedPipPanel */
+            {videoFloating ? (
+              /* Placeholder shown while video is in floating panel */
               <div className="absolute inset-0 flex flex-col items-center justify-center gap-2" style={{ color: "rgba(255,255,255,0.35)" }}>
                 <Maximize2 className="w-6 h-6" />
-                <p className="text-xs">{(unifiedPipWindow && !unifiedPipWindow.closed) ? "Vídeo no Studio PiP" : "Vídeo flutuante"}</p>
+                <p className="text-xs">Vídeo flutuante</p>
                 <p className="text-[10px]" style={{ color: "rgba(255,255,255,0.20)" }}>Duplo clique para recolher</p>
               </div>
             ) : (
@@ -4198,6 +4226,7 @@ export default function RecordingRoom() {
                     ref={videoRef}
                     src={production.videoUrl}
                     className="w-full h-full object-contain"
+                    style={{ display: (unifiedPipWindow && !unifiedPipWindow.closed) ? "none" : "block" }}
                     onPlay={() => setIsPlaying(true)}
                     onPause={() => setIsPlaying(false)}
                     onLoadedMetadata={(e) => {
@@ -4214,14 +4243,23 @@ export default function RecordingRoom() {
                     controlsList="nodownload noplaybackrate noremoteplayback nofullscreen"
                   />
                 ) : (
-                  <div className="w-full h-full flex flex-col items-center justify-center gap-3" style={{ color: "rgba(255,255,255,0.50)" }}>
+                  <div className="w-full h-full flex flex-col items-center justify-center gap-3" style={{ display: (unifiedPipWindow && !unifiedPipWindow.closed) ? "none" : undefined, color: "rgba(255,255,255,0.50)" }}>
                     <div className="w-16 h-16 rounded-2xl flex items-center justify-center" style={{ background: "rgba(255,255,255,0.10)" }}>
                       <Play className="w-7 h-7" />
                     </div>
                     <p className="text-xs">Nenhum video anexado a esta producao</p>
                   </div>
                 )}
-                <DraggableTimecode videoRef={videoRef} visible={timecodeVisible && videoDuration > 0} />
+                {(unifiedPipWindow && !unifiedPipWindow.closed) && (
+                  <div className="absolute inset-0 flex flex-col items-center justify-center gap-2" style={{ color: "rgba(255,255,255,0.35)", pointerEvents: "none" }}>
+                    <Maximize2 className="w-6 h-6" />
+                    <p className="text-xs">Vídeo no Studio PiP</p>
+                    <p className="text-[10px]" style={{ color: "rgba(255,255,255,0.20)" }}>Duplo clique para recolher</p>
+                  </div>
+                )}
+                {!(unifiedPipWindow && !unifiedPipWindow.closed) && (
+                  <DraggableTimecode videoRef={videoRef} visible={timecodeVisible && videoDuration > 0} />
+                )}
                 <button
                   onClick={(e) => { e.stopPropagation(); setIsMuted((m) => !m); }}
                   className="absolute top-3 right-3 p-2 rounded-xl bg-black/40 text-zinc-400 hover:text-white transition-all hover:bg-black/60"
@@ -4230,7 +4268,7 @@ export default function RecordingRoom() {
                   {isMuted ? <VolumeX className="w-4 h-4" /> : <Volume2 className="w-4 h-4" />}
                 </button>
                 {/* Landscape floating recording controls */}
-                {isLandscapeMobile && (
+                {isLandscapeMobile && !(unifiedPipWindow && !unifiedPipWindow.closed) && (
                   <div style={{ position: 'absolute', bottom: 8, right: 8, display: 'flex', alignItems: 'center', gap: 5, background: 'rgba(6,8,16,0.82)', backdropFilter: 'blur(14px)', WebkitBackdropFilter: 'blur(14px)', padding: '5px 7px', borderRadius: 12, zIndex: 10, border: '1px solid rgba(255,255,255,0.07)', boxShadow: '0 4px 24px rgba(0,0,0,0.5)' }}>
                     <button
                       onClick={canTextControl ? () => seek(-2) : undefined}

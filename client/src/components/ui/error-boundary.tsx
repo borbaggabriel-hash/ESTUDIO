@@ -32,15 +32,31 @@ export class ErrorBoundary extends Component<Props, State> {
     );
   }
 
+  static isChunkLoadError(error: Error): boolean {
+    const msg = error.message || "";
+    return (
+      msg.includes("is not a valid JavaScript MIME type") ||
+      msg.includes("Failed to fetch dynamically imported module") ||
+      msg.includes("Importing a module script failed") ||
+      msg.includes("Unable to preload CSS")
+    );
+  }
+
   componentDidCatch(error: Error, errorInfo: { componentStack?: string | null }) {
     console.error("[ErrorBoundary]", error.message, errorInfo.componentStack);
+    if (ErrorBoundary.isChunkLoadError(error)) {
+      sessionStorage.removeItem("vhub_lazy_import_retry");
+      setTimeout(() => window.location.reload(), 300);
+      return;
+    }
     if (ErrorBoundary.isDomMutationError(error)) {
       setTimeout(() => window.location.reload(), 300);
     }
   }
 
   handleReset = () => {
-    if (this.state.error && ErrorBoundary.isDomMutationError(this.state.error)) {
+    if (this.state.error && (ErrorBoundary.isChunkLoadError(this.state.error) || ErrorBoundary.isDomMutationError(this.state.error))) {
+      sessionStorage.removeItem("vhub_lazy_import_retry");
       window.location.reload();
       return;
     }

@@ -20,9 +20,17 @@ export function serveStatic(app: Express) {
   }
 
   // Other static files (favicon, etc.) — short cache with revalidation
+  // index.html MUST be no-cache: stale HTML + new chunk hashes = lazy-import crash
   app.use(express.static(distPath, {
     maxAge: "1h",
     etag: true,
+    setHeaders: (res, filePath) => {
+      if (filePath.endsWith("index.html")) {
+        res.setHeader("Cache-Control", "no-cache, no-store, must-revalidate");
+        res.setHeader("Pragma", "no-cache");
+        res.setHeader("Expires", "0");
+      }
+    },
   }));
 
   // fall through to index.html if the file doesn't exist (SPA routing)
